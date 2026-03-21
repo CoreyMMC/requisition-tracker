@@ -53,6 +53,7 @@ export default function OrderItemsTable({
   const [items, setItems] = useState(sortByLineNo(initialItems))
   const [statusMessage, setStatusMessage] = useState('Autosave is on')
   const [savingAll, setSavingAll] = useState(false)
+  const [addingLine, setAddingLine] = useState(false)
 
   const [editingCell, setEditingCell] = useState<{
     itemId: string
@@ -193,6 +194,49 @@ export default function OrderItemsTable({
     autosaveTimers.current[item.id] = setTimeout(() => {
       void saveSingleItem(item, allItems)
     }, delay)
+  }
+
+  async function handleAddLine() {
+    setAddingLine(true)
+    setStatusMessage('Adding new line...')
+
+    const nextLineNo =
+      items.length > 0 ? Math.max(...items.map((item) => item.line_no)) + 1 : 1
+
+    const newItemDefaults = {
+      order_id: orderId,
+      line_no: nextLineNo,
+      item_no: 'NEW',
+      item_name: 'New line - edit me',
+      qty_ordered: 1,
+      amount_aud: 0,
+      qty_received: 0,
+      complete: false,
+      follow_up: false,
+      comments: '',
+    }
+
+    const { data, error } = await supabase
+      .from('order_items')
+      .insert(newItemDefaults)
+      .select('*')
+      .single()
+
+    setAddingLine(false)
+
+    if (error || !data) {
+      setStatusMessage(`Failed to add line: ${error?.message || 'Unknown error'}`)
+      return
+    }
+
+    setItems((prev) => sortByLineNo([...prev, data as OrderItem]))
+    setTemporaryStatus(`Added line ${nextLineNo}`)
+
+    setEditingCell({
+      itemId: data.id,
+      field: 'item_name',
+    })
+    setCellDraft('New line - edit me')
   }
 
   function handleQtyReceivedChange(id: string, rawValue: string) {
@@ -404,13 +448,20 @@ export default function OrderItemsTable({
       )
     }
 
+    const shownValue = displayValue?.trim() ? displayValue : '—'
+
     return (
       <span
         onDoubleClick={() => startCellEdit(item, field)}
         className={editMode ? 'cursor-pointer rounded px-1 hover:bg-yellow-100' : ''}
         title={editMode ? 'Double click to edit' : undefined}
+        style={{
+          display: 'inline-block',
+          minWidth: '40px',
+          color: shownValue === '—' ? '#6b7280' : '#111111',
+        }}
       >
-        {displayValue}
+        {shownValue}
       </span>
     )
   }
@@ -427,8 +478,46 @@ export default function OrderItemsTable({
         <div className="flex gap-3">
           <button
             type="button"
+            onClick={() => void handleAddLine()}
+            disabled={addingLine}
+            style={{
+              backgroundColor: '#2563eb',
+              color: '#ffffff',
+              border: '2px solid #1d4ed8',
+              borderRadius: '8px',
+              padding: '10px 16px',
+              fontWeight: 700,
+              fontSize: '14px',
+              lineHeight: 1.2,
+              display: 'inline-block',
+              minWidth: '110px',
+              textAlign: 'center',
+              cursor: addingLine ? 'not-allowed' : 'pointer',
+              opacity: addingLine ? 0.6 : 1,
+              boxShadow: '0 1px 2px rgba(0,0,0,0.15)',
+            }}
+          >
+            {addingLine ? 'Adding...' : 'Add Line'}
+          </button>
+
+          <button
+            type="button"
             onClick={handleCompleteAll}
-            className="rounded border bg-white px-4 py-2 text-black"
+            style={{
+              backgroundColor: '#16a34a',
+              color: '#ffffff',
+              border: '2px solid #166534',
+              borderRadius: '8px',
+              padding: '10px 16px',
+              fontWeight: 700,
+              fontSize: '14px',
+              lineHeight: 1.2,
+              display: 'inline-block',
+              minWidth: '120px',
+              textAlign: 'center',
+              cursor: 'pointer',
+              boxShadow: '0 1px 2px rgba(0,0,0,0.15)',
+            }}
           >
             Complete All
           </button>

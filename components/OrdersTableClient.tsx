@@ -95,13 +95,54 @@ function getSortableTimestamp(order: Order) {
 }
 
 export default function OrdersTableClient({ initialOrders }: Props) {
+  const [orders, setOrders] = useState(initialOrders)
   const [editMode, setEditMode] = useState(false)
+  const [deletingOrderId, setDeletingOrderId] = useState<string | null>(null)
 
   const sortedOrders = useMemo(() => {
-    return [...initialOrders].sort(
+    return [...orders].sort(
       (a, b) => getSortableTimestamp(b) - getSortableTimestamp(a)
     )
-  }, [initialOrders])
+  }, [orders])
+
+  async function handleDeleteOrder(order: Order) {
+    const label = order.requisition_number
+      ? `requisition ${order.requisition_number}`
+      : 'this order'
+
+    const confirmed = window.confirm(
+      `Are you sure you want to delete ${label}?`
+    )
+
+    if (!confirmed) return
+
+    setDeletingOrderId(order.id)
+
+    try {
+      const res = await fetch(`/api/orders/${order.id}`, {
+        method: 'DELETE',
+      })
+
+      const raw = await res.text()
+      let data: { error?: string } | null = null
+
+      try {
+        data = raw ? JSON.parse(raw) : null
+      } catch {
+        data = null
+      }
+
+      if (!res.ok) {
+        throw new Error(data?.error || 'Failed to delete order.')
+      }
+
+      setOrders((prev) => prev.filter((row) => row.id !== order.id))
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Delete failed.')
+    } finally {
+      setDeletingOrderId(null)
+    }
+  }
 
   return (
     <main className="min-h-screen bg-white p-8 text-black">
@@ -151,6 +192,7 @@ export default function OrdersTableClient({ initialOrders }: Props) {
           <tbody>
             {sortedOrders.map((order) => {
               const isComplete = order.order_complete === true
+              const isDeleting = deletingOrderId === order.id
 
               return (
                 <tr
@@ -158,22 +200,50 @@ export default function OrdersTableClient({ initialOrders }: Props) {
                   className="border-b bg-white text-black even:bg-gray-50"
                 >
                   <td className="p-3">
-                    <span
-                      style={{
-                        display: 'inline-block',
-                        minWidth: '92px',
-                        textAlign: 'center',
-                        padding: '6px 12px',
-                        borderRadius: '8px',
-                        fontSize: '14px',
-                        fontWeight: 700,
-                        color: 'white',
-                        backgroundColor: isComplete ? '#16a34a' : '#dc2626',
-                        border: `1px solid ${isComplete ? '#166534' : '#991b1b'}`,
-                      }}
-                    >
-                      {isComplete ? 'Complete' : 'Open'}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span
+                        style={{
+                          display: 'inline-block',
+                          minWidth: '92px',
+                          textAlign: 'center',
+                          padding: '6px 12px',
+                          borderRadius: '8px',
+                          fontSize: '14px',
+                          fontWeight: 700,
+                          color: 'white',
+                          backgroundColor: isComplete ? '#16a34a' : '#dc2626',
+                          border: `1px solid ${isComplete ? '#166534' : '#991b1b'}`,
+                        }}
+                      >
+                        {isComplete ? 'Complete' : 'Open'}
+                      </span>
+
+                      {editMode && (
+                        <button
+                          type="button"
+                          onClick={() => void handleDeleteOrder(order)}
+                          disabled={isDeleting}
+                          style={{
+                            backgroundColor: '#facc15',
+                            color: '#111111',
+                            border: '2px solid #ca8a04',
+                            borderRadius: '8px',
+                            padding: '8px 12px',
+                            fontWeight: 700,
+                            fontSize: '13px',
+                            lineHeight: 1.2,
+                            display: 'inline-block',
+                            minWidth: '86px',
+                            textAlign: 'center',
+                            cursor: isDeleting ? 'not-allowed' : 'pointer',
+                            opacity: isDeleting ? 0.6 : 1,
+                            boxShadow: '0 1px 2px rgba(0,0,0,0.15)',
+                          }}
+                        >
+                          {isDeleting ? 'Deleting...' : 'Delete'}
+                        </button>
+                      )}
+                    </div>
                   </td>
 
                   <td className="p-3">
