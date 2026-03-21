@@ -2,12 +2,7 @@
 
 import { FormEvent, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { createClient } from '@supabase/supabase-js'
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
+import { createClient } from '@/lib/supabase/client'
 
 function resolveLoginToEmail(value: string) {
   const input = value.trim().toLowerCase()
@@ -23,6 +18,7 @@ function resolveLoginToEmail(value: string) {
 
 export default function LoginPage() {
   const router = useRouter()
+  const supabase = createClient()
 
   const [login, setLogin] = useState('')
   const [password, setPassword] = useState('')
@@ -53,7 +49,7 @@ export default function LoginPage() {
       return
     }
 
-    router.push('/orders')
+    router.replace('/orders')
     router.refresh()
   }
 
