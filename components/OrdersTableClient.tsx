@@ -146,10 +146,10 @@ export default function OrdersTableClient({ initialOrders }: Props) {
 
   return (
     <main className="min-h-screen bg-white p-8 text-black">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex flex-col gap-4">
         <h1 className="text-2xl font-bold">Orders / Requisitions</h1>
 
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3">
           <button
             type="button"
             onClick={() => setEditMode((prev) => !prev)}
@@ -170,6 +170,66 @@ export default function OrdersTableClient({ initialOrders }: Props) {
             className="rounded border bg-white px-4 py-2 text-black"
           >
             Upload PDF
+          </Link>
+
+          <Link
+            href="/search-missing-item"
+            style={{
+              backgroundColor: '#2563eb',
+              color: '#ffffff',
+              border: '2px solid #1d4ed8',
+              borderRadius: '8px',
+              padding: '10px 16px',
+              fontWeight: 700,
+              fontSize: '14px',
+              lineHeight: 1.2,
+              display: 'inline-block',
+              textAlign: 'center',
+              textDecoration: 'none',
+              boxShadow: '0 1px 2px rgba(0,0,0,0.15)',
+            }}
+          >
+            Search Missing Item
+          </Link>
+
+          <Link
+            href="/mks-stock-list-search-v2"
+            style={{
+              backgroundColor: '#7c3aed',
+              color: '#ffffff',
+              border: '2px solid #6d28d9',
+              borderRadius: '8px',
+              padding: '10px 16px',
+              fontWeight: 700,
+              fontSize: '14px',
+              lineHeight: 1.2,
+              display: 'inline-block',
+              textAlign: 'center',
+              textDecoration: 'none',
+              boxShadow: '0 1px 2px rgba(0,0,0,0.15)',
+            }}
+          >
+            MKs Stock List Search V2
+          </Link>
+
+          <Link
+            href="/non-catalogue-items-list"
+            style={{
+              backgroundColor: '#dc2626',
+              color: '#ffffff',
+              border: '2px solid #991b1b',
+              borderRadius: '8px',
+              padding: '10px 16px',
+              fontWeight: 700,
+              fontSize: '14px',
+              lineHeight: 1.2,
+              display: 'inline-block',
+              textAlign: 'center',
+              textDecoration: 'none',
+              boxShadow: '0 1px 2px rgba(0,0,0,0.15)',
+            }}
+          >
+            Non-Catalogue Items List
           </Link>
         </div>
       </div>
