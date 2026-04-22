@@ -6,6 +6,12 @@ import EditablePoInput from '@/components/EditablePoInput'
 import EditableOrderField from '@/components/EditableOrderField'
 import EditableOrderTitleSelect from '@/components/EditableOrderTitleSelect'
 
+type OrderItemSummary = {
+  id: string
+  complete: boolean | null
+  follow_up: boolean | null
+}
+
 type Order = {
   id: string
   requisition_number: string | null
@@ -16,6 +22,7 @@ type Order = {
   requisition_amount_aud: number | null
   title: string | null
   order_complete: boolean | null
+  order_items?: OrderItemSummary[] | null
 }
 
 type Props = {
@@ -94,15 +101,71 @@ function getSortableTimestamp(order: Order) {
   return Number.isNaN(fallback) ? 0 : fallback
 }
 
+function compareNullableStringsAsc(
+  a: string | null | undefined,
+  b: string | null | undefined
+) {
+  const aValue = (a || '').trim()
+  const bValue = (b || '').trim()
+
+  const aEmpty = aValue.length === 0
+  const bEmpty = bValue.length === 0
+
+  if (aEmpty && bEmpty) return 0
+  if (aEmpty) return 1
+  if (bEmpty) return -1
+
+  return aValue.localeCompare(bValue, undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  })
+}
+
+function compareOrders(a: Order, b: Order) {
+  const dateDifference = getSortableTimestamp(b) - getSortableTimestamp(a)
+  if (dateDifference !== 0) return dateDifference
+
+  const requisitionDifference = compareNullableStringsAsc(
+    a.requisition_number,
+    b.requisition_number
+  )
+  if (requisitionDifference !== 0) return requisitionDifference
+
+  return a.id.localeCompare(b.id)
+}
+
+function getOrderStatusSummary(order: Order) {
+  const items = Array.isArray(order.order_items) ? order.order_items : []
+
+  const totalItems = items.length
+  const completeCount = items.filter((item) => item.complete === true).length
+
+  const allComplete =
+    totalItems > 0 && items.every((item) => item.complete === true)
+
+  const allAddressed =
+    totalItems > 0 &&
+    items.every(
+      (item) => item.complete === true || item.follow_up === true
+    )
+
+  const showFu = !allComplete && allAddressed
+
+  return {
+    totalItems,
+    completeCount,
+    allComplete,
+    showFu,
+  }
+}
+
 export default function OrdersTableClient({ initialOrders }: Props) {
   const [orders, setOrders] = useState(initialOrders)
   const [editMode, setEditMode] = useState(false)
   const [deletingOrderId, setDeletingOrderId] = useState<string | null>(null)
 
   const sortedOrders = useMemo(() => {
-    return [...orders].sort(
-      (a, b) => getSortableTimestamp(b) - getSortableTimestamp(a)
-    )
+    return [...orders].sort(compareOrders)
   }, [orders])
 
   async function handleDeleteOrder(order: Order) {
@@ -251,8 +314,9 @@ export default function OrdersTableClient({ initialOrders }: Props) {
 
           <tbody>
             {sortedOrders.map((order) => {
-              const isComplete = order.order_complete === true
               const isDeleting = deletingOrderId === order.id
+              const { totalItems, completeCount, allComplete, showFu } =
+                getOrderStatusSummary(order)
 
               return (
                 <tr
@@ -260,23 +324,49 @@ export default function OrdersTableClient({ initialOrders }: Props) {
                   className="border-b bg-white text-black even:bg-gray-50"
                 >
                   <td className="p-3">
-                    <div className="flex items-center gap-2">
-                      <span
-                        style={{
-                          display: 'inline-block',
-                          minWidth: '92px',
-                          textAlign: 'center',
-                          padding: '6px 12px',
-                          borderRadius: '8px',
-                          fontSize: '14px',
-                          fontWeight: 700,
-                          color: 'white',
-                          backgroundColor: isComplete ? '#16a34a' : '#dc2626',
-                          border: `1px solid ${isComplete ? '#166534' : '#991b1b'}`,
-                        }}
-                      >
-                        {isComplete ? 'Complete' : 'Open'}
-                      </span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex items-center gap-2">
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '8px',
+                            minWidth: showFu ? '120px' : '92px',
+                            textAlign: 'center',
+                            padding: '6px 12px',
+                            borderRadius: '8px',
+                            fontSize: '14px',
+                            fontWeight: 700,
+                            color: 'white',
+                            backgroundColor: allComplete ? '#16a34a' : '#dc2626',
+                            border: `1px solid ${allComplete ? '#166534' : '#991b1b'}`,
+                          }}
+                        >
+                          <span>{allComplete ? 'Complete' : 'Open'}</span>
+                          {showFu && (
+                            <span
+                              style={{
+                                color: '#93c5fd',
+                                fontWeight: 800,
+                              }}
+                            >
+                              FU
+                            </span>
+                          )}
+                        </span>
+
+                        <span
+                          style={{
+                            minWidth: '52px',
+                            fontWeight: 700,
+                            fontSize: '14px',
+                            color: '#111111',
+                          }}
+                        >
+                          {completeCount}/{totalItems}
+                        </span>
+                      </div>
 
                       {editMode && (
                         <button

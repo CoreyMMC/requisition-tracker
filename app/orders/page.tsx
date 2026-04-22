@@ -6,9 +6,18 @@ export default async function OrdersPage() {
 
   const { data: orders, error } = await supabase
     .from('orders')
-    .select('*')
+    .select(`
+      *,
+      order_items (
+        id,
+        complete,
+        follow_up
+      )
+    `)
     .order('order_date_sort', { ascending: false, nullsFirst: false })
     .order('order_date', { ascending: false, nullsFirst: false })
+    .order('requisition_number', { ascending: true, nullsFirst: false })
+    .order('id', { ascending: true })
 
   if (error) {
     return (
