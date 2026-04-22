@@ -159,6 +159,110 @@ function getOrderStatusSummary(order: Order) {
   }
 }
 
+function renderStatusBadge(allComplete: boolean, showFu: boolean) {
+  if (allComplete) {
+    return (
+      <span
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: '92px',
+          height: '34px',
+          textAlign: 'center',
+          borderRadius: '8px',
+          fontSize: '14px',
+          fontWeight: 700,
+          color: 'white',
+          backgroundColor: '#16a34a',
+          border: '1px solid #166534',
+          boxSizing: 'border-box',
+          flexShrink: 0,
+        }}
+      >
+        Complete
+      </span>
+    )
+  }
+
+  if (showFu) {
+    return (
+      <div
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          width: '92px',
+          gap: '4px',
+          flexShrink: 0,
+        }}
+      >
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: '62px',
+            height: '34px',
+            textAlign: 'center',
+            borderRadius: '8px',
+            fontSize: '14px',
+            fontWeight: 700,
+            color: 'white',
+            backgroundColor: '#dc2626',
+            border: '1px solid #991b1b',
+            boxSizing: 'border-box',
+          }}
+        >
+          Open
+        </span>
+
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: '26px',
+            height: '34px',
+            textAlign: 'center',
+            borderRadius: '8px',
+            fontSize: '13px',
+            fontWeight: 800,
+            color: 'white',
+            backgroundColor: '#2563eb',
+            border: '1px solid #1d4ed8',
+            boxSizing: 'border-box',
+          }}
+        >
+          FU
+        </span>
+      </div>
+    )
+  }
+
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: '92px',
+        height: '34px',
+        textAlign: 'center',
+        borderRadius: '8px',
+        fontSize: '14px',
+        fontWeight: 700,
+        color: 'white',
+        backgroundColor: '#dc2626',
+        border: '1px solid #991b1b',
+        boxSizing: 'border-box',
+        flexShrink: 0,
+      }}
+    >
+      Open
+    </span>
+  )
+}
+
 export default function OrdersTableClient({ initialOrders }: Props) {
   const [orders, setOrders] = useState(initialOrders)
   const [editMode, setEditMode] = useState(false)
@@ -326,35 +430,7 @@ export default function OrdersTableClient({ initialOrders }: Props) {
                   <td className="p-3">
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="flex items-center gap-2">
-                        <span
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            gap: '8px',
-                            minWidth: showFu ? '120px' : '92px',
-                            textAlign: 'center',
-                            padding: '6px 12px',
-                            borderRadius: '8px',
-                            fontSize: '14px',
-                            fontWeight: 700,
-                            color: 'white',
-                            backgroundColor: allComplete ? '#16a34a' : '#dc2626',
-                            border: `1px solid ${allComplete ? '#166534' : '#991b1b'}`,
-                          }}
-                        >
-                          <span>{allComplete ? 'Complete' : 'Open'}</span>
-                          {showFu && (
-                            <span
-                              style={{
-                                color: '#93c5fd',
-                                fontWeight: 800,
-                              }}
-                            >
-                              FU
-                            </span>
-                          )}
-                        </span>
+                        {renderStatusBadge(allComplete, showFu)}
 
                         <span
                           style={{
