@@ -1,22 +1,23 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 
-type ItemSuggestion = {
-  item_no: string
-  item_name: string
-}
+const THRESHOLD_OPTIONS = [7, 14, 28] as const
+
+type ThresholdDays = (typeof THRESHOLD_OPTIONS)[number]
+type SortMode = 'recent_to_oldest' | 'oldest_to_recent'
 
 type OrderSummary = {
   id: string
   requisition_number: string | null
   po_number: string | null
   order_date: string | null
+  order_date_sort: string | null
 }
 
-type RawHistoryRow = {
+type RawOutstandingRow = {
   id: string
   order_id: string
   line_no: number | string
@@ -30,7 +31,7 @@ type RawHistoryRow = {
   order: OrderSummary | OrderSummary[] | null
 }
 
-type HistoryRow = {
+type OutstandingRow = {
   id: string
   order_id: string
   line_no: number
@@ -77,8 +78,8 @@ function formatDateForDisplay(value: string | null | undefined) {
   return trimmed
 }
 
-function getSortableTimestamp(value: string | null | undefined) {
-  if (!value) return 0
+function parseDateToTimestamp(value: string | null | undefined) {
+  if (!value) return NaN
 
   const trimmed = value.trim()
 
@@ -103,8 +104,32 @@ function getSortableTimestamp(value: string | null | undefined) {
     return new Date(year, month, day).getTime()
   }
 
-  const fallback = new Date(trimmed).getTime()
-  return Number.isNaN(fallback) ? 0 : fallback
+  return new Date(trimmed).getTime()
+}
+
+function getDaysOld(order: OrderSummary | null) {
+  const rawDate = order?.order_date_sort || order?.order_date || null
+  const orderTimestamp = parseDateToTimestamp(rawDate)
+
+  if (Number.isNaN(orderTimestamp)) return -1
+
+  const orderDate = new Date(orderTimestamp)
+  const today = new Date()
+
+  const orderStart = new Date(
+    orderDate.getFullYear(),
+    orderDate.getMonth(),
+    orderDate.getDate()
+  )
+
+  const todayStart = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate()
+  )
+
+  const diffMs = todayStart.getTime() - orderStart.getTime()
+  return Math.floor(diffMs / (1000 * 60 * 60 * 24))
 }
 
 function formatQty(value: number) {
@@ -112,163 +137,71 @@ function formatQty(value: number) {
   return String(value)
 }
 
-function normaliseHistoryRows(rows: RawHistoryRow[]): HistoryRow[] {
-  return rows
-    .map((row) => {
-      const orderValue = Array.isArray(row.order)
-        ? row.order[0] ?? null
-        : row.order ?? null
-
-      return {
-        id: row.id,
-        order_id: row.order_id,
-        line_no: Number(row.line_no ?? 0),
-        item_no: row.item_no ?? '',
-        item_name: row.item_name ?? '',
-        qty_ordered: Number(row.qty_ordered ?? 0),
-        qty_received: Number(row.qty_received ?? 0),
-        complete: row.complete === true,
-        follow_up: row.follow_up === true,
-        comments: row.comments ?? '',
-        order: orderValue,
-      }
-    })
-    .sort((a, b) => {
-      const dateDiff =
-        getSortableTimestamp(b.order?.order_date) -
-        getSortableTimestamp(a.order?.order_date)
-
-      if (dateDiff !== 0) return dateDiff
-
-      return b.line_no - a.line_no
-    })
+function getThresholdHeading(days: ThresholdDays) {
+  if (days === 7) return 'Items not arrived exceeding 7 days'
+  if (days === 14) return 'Items not arrived exceeding 14 days'
+  return 'Items not arrived exceeding 28 days'
 }
 
-function cleanText(value: string | null | undefined) {
-  return (value ?? '').replace(/\s+/g, ' ').trim()
-}
+function normaliseOutstandingRows(rows: RawOutstandingRow[]): OutstandingRow[] {
+  return rows.map((row) => {
+    const orderValue = Array.isArray(row.order)
+      ? row.order[0] ?? null
+      : row.order ?? null
 
-function normaliseNameForNoCodeDedup(value: string) {
-  return cleanText(value).toLowerCase()
-}
-
-function scoreSuggestionName(name: string) {
-  const cleaned = cleanText(name)
-  const lower = cleaned.toLowerCase()
-
-  let score = 0
-
-  score += cleaned.length
-
-  if (lower.includes('approved liquidated')) score += 500
-  if (/\bapproved\b/.test(lower)) score += 100
-  if (/\bliquidated\b/.test(lower)) score += 100
-
-  const decimalMatches = cleaned.match(/\b\d+\.\d{1,2}\b/g)
-  if (decimalMatches) {
-    score += decimalMatches.length * 120
-  }
-
-  const packetCountMatches = cleaned.match(/\b\d+\s+packet\b/gi)
-  if (packetCountMatches) {
-    score += packetCountMatches.length * 50
-  }
-
-  return score
-}
-
-function choosePreferredSuggestion(rows: ItemSuggestion[]) {
-  const cleanedRows = rows
-    .map((row) => ({
-      item_no: cleanText(row.item_no),
-      item_name: cleanText(row.item_name),
-    }))
-    .filter((row) => row.item_no || row.item_name)
-
-  if (cleanedRows.length === 0) {
     return {
-      item_no: '',
-      item_name: '',
+      id: row.id,
+      order_id: row.order_id,
+      line_no: Number(row.line_no ?? 0),
+      item_no: row.item_no ?? '',
+      item_name: row.item_name ?? '',
+      qty_ordered: Number(row.qty_ordered ?? 0),
+      qty_received: Number(row.qty_received ?? 0),
+      complete: row.complete === true,
+      follow_up: row.follow_up === true,
+      comments: row.comments ?? '',
+      order: orderValue,
     }
-  }
-
-  const sorted = [...cleanedRows].sort((a, b) => {
-    const scoreDiff = scoreSuggestionName(a.item_name) - scoreSuggestionName(b.item_name)
-    if (scoreDiff !== 0) return scoreDiff
-
-    const nameLengthDiff = a.item_name.length - b.item_name.length
-    if (nameLengthDiff !== 0) return nameLengthDiff
-
-    return a.item_name.localeCompare(b.item_name, undefined, {
-      sensitivity: 'base',
-      numeric: true,
-    })
-  })
-
-  return sorted[0]
-}
-
-function dedupeSuggestions(rows: ItemSuggestion[]) {
-  const byCode = new Map<string, ItemSuggestion[]>()
-  const noCodeMap = new Map<string, ItemSuggestion>()
-
-  for (const row of rows) {
-    const itemNo = cleanText(row.item_no)
-    const itemName = cleanText(row.item_name)
-
-    if (!itemNo && !itemName) continue
-
-    if (itemNo) {
-      const existing = byCode.get(itemNo) ?? []
-      existing.push({
-        item_no: itemNo,
-        item_name: itemName,
-      })
-      byCode.set(itemNo, existing)
-      continue
-    }
-
-    const noCodeKey = normaliseNameForNoCodeDedup(itemName)
-    if (!noCodeMap.has(noCodeKey)) {
-      noCodeMap.set(noCodeKey, {
-        item_no: '',
-        item_name: itemName,
-      })
-    }
-  }
-
-  const dedupedByCode = Array.from(byCode.values()).map((group) =>
-    choosePreferredSuggestion(group)
-  )
-
-  const dedupedNoCode = Array.from(noCodeMap.values())
-
-  return [...dedupedByCode, ...dedupedNoCode].sort((a, b) => {
-    const nameCompare = a.item_name.localeCompare(b.item_name, undefined, {
-      sensitivity: 'base',
-      numeric: true,
-    })
-    if (nameCompare !== 0) return nameCompare
-
-    return a.item_no.localeCompare(b.item_no, undefined, {
-      sensitivity: 'base',
-      numeric: true,
-    })
   })
 }
 
-export default function SearchMissingItemPage() {
+function sortOutstandingRows(
+  rows: OutstandingRow[],
+  sortMode: SortMode
+) {
+  return [...rows].sort((a, b) => {
+    const dateA = parseDateToTimestamp(a.order?.order_date_sort || a.order?.order_date)
+    const dateB = parseDateToTimestamp(b.order?.order_date_sort || b.order?.order_date)
+
+    if (!Number.isNaN(dateA) && !Number.isNaN(dateB) && dateA !== dateB) {
+      return sortMode === 'recent_to_oldest' ? dateB - dateA : dateA - dateB
+    }
+
+    const reqA = a.order?.requisition_number ?? ''
+    const reqB = b.order?.requisition_number ?? ''
+
+    const reqCompare = reqA.localeCompare(reqB, undefined, {
+      numeric: true,
+      sensitivity: 'base',
+    })
+    if (reqCompare !== 0) return reqCompare
+
+    if (a.line_no !== b.line_no) {
+      return a.line_no - b.line_no
+    }
+
+    return a.id.localeCompare(b.id)
+  })
+}
+
+export default function OutstandingItemsPage() {
   const supabase = createClient()
 
-  const [query, setQuery] = useState('')
-  const [suggestions, setSuggestions] = useState<ItemSuggestion[]>([])
-  const [selectedItem, setSelectedItem] = useState<ItemSuggestion | null>(null)
-  const [historyRows, setHistoryRows] = useState<HistoryRow[]>([])
-  const [searching, setSearching] = useState(false)
-  const [loadingHistory, setLoadingHistory] = useState(false)
-  const [statusMessage, setStatusMessage] = useState(
-    'Type an item name or item code, then click Search'
-  )
+  const [activeThreshold, setActiveThreshold] = useState<ThresholdDays>(7)
+  const [sortMode, setSortMode] = useState<SortMode>('recent_to_oldest')
+  const [historyRows, setHistoryRows] = useState<OutstandingRow[]>([])
+  const [loadingOutstanding, setLoadingOutstanding] = useState(true)
+  const [statusMessage, setStatusMessage] = useState('Loading outstanding items...')
 
   const autosaveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const statusClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -283,6 +216,14 @@ export default function SearchMissingItemPage() {
     }
   }, [])
 
+  useEffect(() => {
+    void loadOutstandingItems(activeThreshold)
+  }, [])
+
+  const sortedHistoryRows = useMemo(() => {
+    return sortOutstandingRows(historyRows, sortMode)
+  }, [historyRows, sortMode])
+
   function setTemporaryStatus(message: string) {
     setStatusMessage(message)
 
@@ -291,73 +232,16 @@ export default function SearchMissingItemPage() {
     }
 
     statusClearTimer.current = setTimeout(() => {
-      setStatusMessage('Ready')
+      setStatusMessage(getThresholdHeading(activeThreshold))
     }, 1800)
   }
 
-  async function handleSearch() {
-    const trimmed = query.trim()
-
-    if (!trimmed) {
-      setSuggestions([])
-      setSelectedItem(null)
-      setHistoryRows([])
-      setStatusMessage('Enter an item code or item name first')
-      return
-    }
-
-    setSearching(true)
-    setSelectedItem(null)
+  async function loadOutstandingItems(thresholdDays: ThresholdDays) {
+    setLoadingOutstanding(true)
     setHistoryRows([])
-    setSuggestions([])
-    setStatusMessage('Searching matching items...')
+    setStatusMessage(`Loading items not arrived exceeding ${thresholdDays} days...`)
 
-    const [codeResult, nameResult] = await Promise.all([
-      supabase
-        .from('order_items')
-        .select('item_no, item_name')
-        .ilike('item_no', `%${trimmed}%`)
-        .limit(25),
-      supabase
-        .from('order_items')
-        .select('item_no, item_name')
-        .ilike('item_name', `%${trimmed}%`)
-        .limit(25),
-    ])
-
-    setSearching(false)
-
-    const firstError = codeResult.error || nameResult.error
-
-    if (firstError) {
-      setStatusMessage(`Search failed: ${firstError.message}`)
-      return
-    }
-
-    const merged = dedupeSuggestions([
-      ...((codeResult.data ?? []) as ItemSuggestion[]),
-      ...((nameResult.data ?? []) as ItemSuggestion[]),
-    ])
-
-    setSuggestions(merged)
-
-    if (merged.length === 0) {
-      setStatusMessage('No matching items found')
-      return
-    }
-
-    setStatusMessage(
-      `Found ${merged.length} matching item${merged.length === 1 ? '' : 's'} — click the exact one`
-    )
-  }
-
-  async function loadHistoryForSuggestion(suggestion: ItemSuggestion) {
-    setSelectedItem(suggestion)
-    setLoadingHistory(true)
-    setHistoryRows([])
-    setStatusMessage('Loading order history...')
-
-    let queryBuilder = supabase
+    const { data, error } = await supabase
       .from('order_items')
       .select(`
         id,
@@ -374,36 +258,36 @@ export default function SearchMissingItemPage() {
           id,
           requisition_number,
           po_number,
-          order_date
+          order_date,
+          order_date_sort
         )
       `)
+      .or('complete.eq.false,complete.is.null')
 
-    if (suggestion.item_no.trim()) {
-      queryBuilder = queryBuilder.eq('item_no', suggestion.item_no.trim())
-    } else {
-      queryBuilder = queryBuilder.eq('item_name', suggestion.item_name.trim())
-    }
-
-    const { data, error } = await queryBuilder
-
-    setLoadingHistory(false)
+    setLoadingOutstanding(false)
 
     if (error) {
-      setStatusMessage(`Failed to load order history: ${error.message}`)
+      setStatusMessage(`Failed to load outstanding items: ${error.message}`)
       return
     }
 
-    const normalised = normaliseHistoryRows((data ?? []) as RawHistoryRow[])
-    setHistoryRows(normalised)
+    const normalised = normaliseOutstandingRows((data ?? []) as RawOutstandingRow[])
 
-    if (normalised.length === 0) {
-      setStatusMessage('No historical orders found for that item')
+    const filtered = normalised.filter((row) => {
+      if (row.complete) return false
+
+      const daysOld = getDaysOld(row.order)
+      return daysOld >= thresholdDays
+    })
+
+    setHistoryRows(filtered)
+
+    if (filtered.length === 0) {
+      setStatusMessage(`No outstanding items found exceeding ${thresholdDays} days`)
       return
     }
 
-    setStatusMessage(
-      `Showing ${normalised.length} order row${normalised.length === 1 ? '' : 's'}`
-    )
+    setStatusMessage(getThresholdHeading(thresholdDays))
   }
 
   async function syncParentOrderComplete(orderId: string) {
@@ -430,7 +314,7 @@ export default function SearchMissingItemPage() {
   }
 
   async function saveSingleHistoryRow(
-    row: HistoryRow,
+    row: OutstandingRow,
     successMessage: string
   ) {
     setStatusMessage(`Saving requisition ${row.order?.requisition_number ?? 'row'}...`)
@@ -462,7 +346,7 @@ export default function SearchMissingItemPage() {
     }
   }
 
-  function scheduleSave(row: HistoryRow, successMessage: string, delay = 700) {
+  function scheduleSave(row: OutstandingRow, successMessage: string, delay = 700) {
     if (autosaveTimers.current[row.id]) {
       clearTimeout(autosaveTimers.current[row.id])
     }
@@ -558,12 +442,9 @@ export default function SearchMissingItemPage() {
     })
   }
 
-  function clearSearch() {
-    setQuery('')
-    setSuggestions([])
-    setSelectedItem(null)
-    setHistoryRows([])
-    setStatusMessage('Type an item name or item code, then click Search')
+  async function handleThresholdChange(days: ThresholdDays) {
+    setActiveThreshold(days)
+    await loadOutstandingItems(days)
   }
 
   return (
@@ -602,124 +483,122 @@ export default function SearchMissingItemPage() {
             fontSize: '16px',
           }}
         >
-          Search Missing Item
+          Outstanding Items
         </div>
       </div>
 
-      <h1 className="mb-6 text-2xl font-bold">Search Missing Item</h1>
+      <h1 className="mb-4 text-2xl font-bold">Outstanding Items</h1>
 
-      <div className="mb-4 text-sm text-gray-700">{statusMessage}</div>
-
-      <form
-        onSubmit={(e) => {
-          e.preventDefault()
-          void handleSearch()
+      <div
+        style={{
+          marginBottom: '16px',
+          padding: '12px 14px',
+          border: '1px solid #d1d5db',
+          borderRadius: '8px',
+          backgroundColor: '#f9fafb',
+          fontWeight: 700,
+          fontSize: '16px',
         }}
-        className="mb-6 flex flex-wrap items-center gap-3"
       >
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search by item code or item name"
-          className="w-full max-w-xl rounded border bg-white p-3 text-black"
-        />
+        {getThresholdHeading(activeThreshold)}
+      </div>
+
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        {THRESHOLD_OPTIONS.map((days) => {
+          const isActive = activeThreshold === days
+
+          return (
+            <button
+              key={days}
+              type="button"
+              onClick={() => void handleThresholdChange(days)}
+              style={{
+                backgroundColor: isActive ? '#16a34a' : '#ffffff',
+                color: isActive ? '#ffffff' : '#111111',
+                border: isActive ? '2px solid #166534' : '2px solid #111111',
+                borderRadius: '8px',
+                padding: '10px 16px',
+                fontWeight: 700,
+                fontSize: '14px',
+                lineHeight: 1.2,
+                display: 'inline-block',
+                minWidth: '190px',
+                textAlign: 'center',
+                cursor: 'pointer',
+                boxShadow: '0 1px 2px rgba(0,0,0,0.15)',
+              }}
+            >
+              {days === 7
+                ? 'Exceeding 7 days'
+                : days === 14
+                  ? 'Exceeding 14 days'
+                  : 'Exceeding 28 days'}
+            </button>
+          )
+        })}
 
         <button
-          type="submit"
-          disabled={searching}
+          type="button"
+          onClick={() => setSortMode('recent_to_oldest')}
           style={{
-            backgroundColor: '#2563eb',
-            color: '#ffffff',
-            border: '2px solid #1d4ed8',
+            backgroundColor: sortMode === 'recent_to_oldest' ? '#16a34a' : '#ffffff',
+            color: sortMode === 'recent_to_oldest' ? '#ffffff' : '#111111',
+            border: sortMode === 'recent_to_oldest' ? '2px solid #166534' : '2px solid #111111',
             borderRadius: '8px',
             padding: '10px 16px',
             fontWeight: 700,
             fontSize: '14px',
             lineHeight: 1.2,
             display: 'inline-block',
-            minWidth: '110px',
+            minWidth: '190px',
             textAlign: 'center',
-            cursor: searching ? 'not-allowed' : 'pointer',
-            opacity: searching ? 0.6 : 1,
+            cursor: 'pointer',
             boxShadow: '0 1px 2px rgba(0,0,0,0.15)',
           }}
         >
-          {searching ? 'Searching...' : 'Search'}
+          Sort: Recent to Oldest
         </button>
 
         <button
           type="button"
-          onClick={clearSearch}
+          onClick={() => setSortMode('oldest_to_recent')}
+          style={{
+            backgroundColor: sortMode === 'oldest_to_recent' ? '#16a34a' : '#ffffff',
+            color: sortMode === 'oldest_to_recent' ? '#ffffff' : '#111111',
+            border: sortMode === 'oldest_to_recent' ? '2px solid #166534' : '2px solid #111111',
+            borderRadius: '8px',
+            padding: '10px 16px',
+            fontWeight: 700,
+            fontSize: '14px',
+            lineHeight: 1.2,
+            display: 'inline-block',
+            minWidth: '190px',
+            textAlign: 'center',
+            cursor: 'pointer',
+            boxShadow: '0 1px 2px rgba(0,0,0,0.15)',
+          }}
+        >
+          Sort: Oldest to Recent
+        </button>
+
+        <button
+          type="button"
+          onClick={() => void loadOutstandingItems(activeThreshold)}
           className="rounded border bg-white px-4 py-2 text-black"
         >
-          Clear
+          Refresh
         </button>
-      </form>
+      </div>
 
-      {suggestions.length > 0 && (
-        <div className="mb-8 rounded border bg-white p-4">
-          <h2 className="mb-3 text-lg font-semibold">
-            Matching Items — click the exact one
-          </h2>
+      <div className="mb-4 text-sm text-gray-700">{statusMessage}</div>
 
-          <div className="grid gap-3">
-            {suggestions.map((suggestion) => {
-              const key = `${suggestion.item_no}|||${suggestion.item_name}`
-              const isSelected =
-                selectedItem?.item_no === suggestion.item_no &&
-                selectedItem?.item_name === suggestion.item_name
-
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => void loadHistoryForSuggestion(suggestion)}
-                  style={{
-                    backgroundColor: isSelected ? '#dbeafe' : '#ffffff',
-                    color: '#111111',
-                    border: isSelected
-                      ? '2px solid #2563eb'
-                      : '1px solid #d1d5db',
-                    borderRadius: '8px',
-                    padding: '12px 14px',
-                    fontWeight: 600,
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <div>{suggestion.item_name || 'Unnamed item'}</div>
-                  <div
-                    style={{
-                      fontSize: '13px',
-                      color: '#4b5563',
-                      marginTop: '4px',
-                    }}
-                  >
-                    Code: {suggestion.item_no || '—'}
-                  </div>
-                </button>
-              )
-            })}
-          </div>
+      {loadingOutstanding && (
+        <div className="rounded border bg-white p-4">
+          Loading outstanding items...
         </div>
       )}
 
-      {selectedItem && (
-        <div className="mb-4 rounded border bg-gray-50 p-4">
-          <div className="font-semibold">Selected Item</div>
-          <div className="mt-1">{selectedItem.item_name || 'Unnamed item'}</div>
-          <div className="text-sm text-gray-600">
-            Code: {selectedItem.item_no || '—'}
-          </div>
-        </div>
-      )}
-
-      {loadingHistory && (
-        <div className="rounded border bg-white p-4">Loading order history...</div>
-      )}
-
-      {!loadingHistory && selectedItem && (
+      {!loadingOutstanding && (
         <div className="overflow-x-auto rounded border bg-white">
           <table className="min-w-full border-collapse">
             <thead>
@@ -739,7 +618,7 @@ export default function SearchMissingItemPage() {
             </thead>
 
             <tbody>
-              {historyRows.map((row) => (
+              {sortedHistoryRows.map((row) => (
                 <tr
                   key={row.id}
                   className="border-b align-top bg-white text-black even:bg-gray-50"
@@ -836,10 +715,10 @@ export default function SearchMissingItemPage() {
                 </tr>
               ))}
 
-              {historyRows.length === 0 && (
+              {sortedHistoryRows.length === 0 && (
                 <tr>
                   <td colSpan={11} className="p-6 text-center text-gray-500">
-                    No order history found for this item.
+                    No outstanding items found for this threshold.
                   </td>
                 </tr>
               )}

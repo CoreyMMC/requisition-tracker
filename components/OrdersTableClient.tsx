@@ -29,6 +29,13 @@ type Props = {
   initialOrders: Order[]
 }
 
+const STATUS_TILE_WIDTH = 118
+const STATUS_TILE_HEIGHT = 34
+const SPLIT_TILE_GAP = 4
+const SPLIT_OPEN_WIDTH = 42
+const SPLIT_FOLLOW_UP_WIDTH =
+  STATUS_TILE_WIDTH - SPLIT_OPEN_WIDTH - SPLIT_TILE_GAP
+
 function formatCurrency(value: number | null) {
   if (value === null || value === undefined) return '—'
 
@@ -145,54 +152,56 @@ function getOrderStatusSummary(order: Order) {
 
   const allAddressed =
     totalItems > 0 &&
-    items.every(
-      (item) => item.complete === true || item.follow_up === true
-    )
+    items.every((item) => item.complete === true || item.follow_up === true)
 
-  const showFu = !allComplete && allAddressed
+  const showFollowUp = !allComplete && allAddressed
 
   return {
     totalItems,
     completeCount,
     allComplete,
-    showFu,
+    showFollowUp,
   }
 }
 
-function renderStatusBadge(allComplete: boolean, showFu: boolean) {
+function baseStatusTileStyle(backgroundColor: string, borderColor: string) {
+  return {
+    display: 'inline-flex',
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    width: `${STATUS_TILE_WIDTH}px`,
+    height: `${STATUS_TILE_HEIGHT}px`,
+    textAlign: 'center' as const,
+    borderRadius: '8px',
+    fontSize: '14px',
+    fontWeight: 700,
+    color: '#ffffff',
+    backgroundColor,
+    border: `1px solid ${borderColor}`,
+    boxSizing: 'border-box' as const,
+    flexShrink: 0,
+    whiteSpace: 'nowrap' as const,
+    padding: '0 10px',
+  }
+}
+
+function renderStatusBadge(allComplete: boolean, showFollowUp: boolean) {
   if (allComplete) {
     return (
-      <span
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          width: '92px',
-          height: '34px',
-          textAlign: 'center',
-          borderRadius: '8px',
-          fontSize: '14px',
-          fontWeight: 700,
-          color: 'white',
-          backgroundColor: '#16a34a',
-          border: '1px solid #166534',
-          boxSizing: 'border-box',
-          flexShrink: 0,
-        }}
-      >
+      <span style={baseStatusTileStyle('#16a34a', '#166534')}>
         Complete
       </span>
     )
   }
 
-  if (showFu) {
+  if (showFollowUp) {
     return (
       <div
         style={{
           display: 'inline-flex',
           alignItems: 'center',
-          width: '92px',
-          gap: '4px',
+          width: `${STATUS_TILE_WIDTH}px`,
+          gap: `${SPLIT_TILE_GAP}px`,
           flexShrink: 0,
         }}
       >
@@ -201,16 +210,19 @@ function renderStatusBadge(allComplete: boolean, showFu: boolean) {
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            width: '62px',
-            height: '34px',
+            width: `${SPLIT_OPEN_WIDTH}px`,
+            height: `${STATUS_TILE_HEIGHT}px`,
             textAlign: 'center',
             borderRadius: '8px',
-            fontSize: '14px',
+            fontSize: '12px',
             fontWeight: 700,
-            color: 'white',
+            color: '#ffffff',
             backgroundColor: '#dc2626',
             border: '1px solid #991b1b',
             boxSizing: 'border-box',
+            flexShrink: 0,
+            whiteSpace: 'nowrap',
+            padding: '0 4px',
           }}
         >
           Open
@@ -221,43 +233,30 @@ function renderStatusBadge(allComplete: boolean, showFu: boolean) {
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            width: '26px',
-            height: '34px',
+            width: `${SPLIT_FOLLOW_UP_WIDTH}px`,
+            height: `${STATUS_TILE_HEIGHT}px`,
             textAlign: 'center',
             borderRadius: '8px',
-            fontSize: '13px',
+            fontSize: '9px',
             fontWeight: 800,
-            color: 'white',
+            color: '#ffffff',
             backgroundColor: '#2563eb',
             border: '1px solid #1d4ed8',
             boxSizing: 'border-box',
+            flexShrink: 0,
+            whiteSpace: 'nowrap',
+            padding: '0 3px',
+            letterSpacing: '0.1px',
           }}
         >
-          FU
+          Follow Up ✓
         </span>
       </div>
     )
   }
 
   return (
-    <span
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: '92px',
-        height: '34px',
-        textAlign: 'center',
-        borderRadius: '8px',
-        fontSize: '14px',
-        fontWeight: 700,
-        color: 'white',
-        backgroundColor: '#dc2626',
-        border: '1px solid #991b1b',
-        boxSizing: 'border-box',
-        flexShrink: 0,
-      }}
-    >
+    <span style={baseStatusTileStyle('#dc2626', '#991b1b')}>
       Open
     </span>
   )
@@ -326,17 +325,71 @@ export default function OrdersTableClient({ initialOrders }: Props) {
           </button>
 
           <Link
-            href="/orders/new"
-            className="rounded bg-black px-4 py-2 text-white"
+  href="/orders/new"
+  className="rounded bg-black px-4 py-2 text-white"
+>
+  Manual Order Entry
+</Link>
+
+<Link
+  href="/upload"
+  style={{
+    backgroundColor: '#22c55e',
+    color: '#111111',
+    border: '4px solid #166534',
+    borderRadius: '10px',
+    padding: '14px 22px',
+    fontWeight: 900,
+    fontSize: '16px',
+    lineHeight: 1.1,
+    display: 'inline-block',
+    textAlign: 'center',
+    textDecoration: 'none',
+    boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+    letterSpacing: '0.4px',
+  }}
+>
+  UPLOAD PDF
+</Link>
+
+          <Link
+            href="/recent-items"
+            style={{
+              backgroundColor: '#0f766e',
+              color: '#ffffff',
+              border: '2px solid #115e59',
+              borderRadius: '8px',
+              padding: '10px 16px',
+              fontWeight: 700,
+              fontSize: '14px',
+              lineHeight: 1.2,
+              display: 'inline-block',
+              textAlign: 'center',
+              textDecoration: 'none',
+              boxShadow: '0 1px 2px rgba(0,0,0,0.15)',
+            }}
           >
-            New Order
+            Recent Items
           </Link>
 
           <Link
-            href="/upload"
-            className="rounded border bg-white px-4 py-2 text-black"
+            href="/outstanding-items"
+            style={{
+              backgroundColor: '#ea580c',
+              color: '#ffffff',
+              border: '2px solid #c2410c',
+              borderRadius: '8px',
+              padding: '10px 16px',
+              fontWeight: 700,
+              fontSize: '14px',
+              lineHeight: 1.2,
+              display: 'inline-block',
+              textAlign: 'center',
+              textDecoration: 'none',
+              boxShadow: '0 1px 2px rgba(0,0,0,0.15)',
+            }}
           >
-            Upload PDF
+            Outstanding Items
           </Link>
 
           <Link
@@ -419,7 +472,7 @@ export default function OrdersTableClient({ initialOrders }: Props) {
           <tbody>
             {sortedOrders.map((order) => {
               const isDeleting = deletingOrderId === order.id
-              const { totalItems, completeCount, allComplete, showFu } =
+              const { totalItems, completeCount, allComplete, showFollowUp } =
                 getOrderStatusSummary(order)
 
               return (
@@ -430,7 +483,7 @@ export default function OrdersTableClient({ initialOrders }: Props) {
                   <td className="p-3">
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="flex items-center gap-2">
-                        {renderStatusBadge(allComplete, showFu)}
+                        {renderStatusBadge(allComplete, showFollowUp)}
 
                         <span
                           style={{

@@ -4,19 +4,18 @@ import Link from 'next/link'
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 
-type ItemSuggestion = {
-  item_no: string
-  item_name: string
-}
+const RECENT_ORDER_LIMIT = 300
+const RECENT_ITEM_LIMIT = 300
 
 type OrderSummary = {
   id: string
   requisition_number: string | null
   po_number: string | null
   order_date: string | null
+  order_date_sort: string | null
 }
 
-type RawHistoryRow = {
+type RawRecentRow = {
   id: string
   order_id: string
   line_no: number | string
@@ -30,7 +29,7 @@ type RawHistoryRow = {
   order: OrderSummary | OrderSummary[] | null
 }
 
-type HistoryRow = {
+type RecentRow = {
   id: string
   order_id: string
   line_no: number
@@ -77,42 +76,21 @@ function formatDateForDisplay(value: string | null | undefined) {
   return trimmed
 }
 
-function getSortableTimestamp(value: string | null | undefined) {
-  if (!value) return 0
-
-  const trimmed = value.trim()
-
-  const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/)
-  if (isoMatch) {
-    const year = Number(isoMatch[1])
-    const month = Number(isoMatch[2]) - 1
-    const day = Number(isoMatch[3])
-    return new Date(year, month, day).getTime()
-  }
-
-  const auMatch = trimmed.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2}|\d{4})$/)
-  if (auMatch) {
-    const day = Number(auMatch[1])
-    const month = Number(auMatch[2]) - 1
-    let year = Number(auMatch[3])
-
-    if (auMatch[3].length === 2) {
-      year += 2000
-    }
-
-    return new Date(year, month, day).getTime()
-  }
-
-  const fallback = new Date(trimmed).getTime()
-  return Number.isNaN(fallback) ? 0 : fallback
-}
-
 function formatQty(value: number) {
   if (Number.isInteger(value)) return String(value)
   return String(value)
 }
 
-function normaliseHistoryRows(rows: RawHistoryRow[]): HistoryRow[] {
+function getDefaultStatusMessage(showCompleted: boolean) {
+  return showCompleted
+    ? `Showing up to the last ${RECENT_ITEM_LIMIT} recent items`
+    : `Showing up to the last ${RECENT_ITEM_LIMIT} recent items that still need action`
+}
+
+function normaliseRecentRows(
+  rows: RawRecentRow[],
+  orderRankMap: Map<string, number>
+): RecentRow[] {
   return rows
     .map((row) => {
       const orderValue = Array.isArray(row.order)
@@ -134,140 +112,25 @@ function normaliseHistoryRows(rows: RawHistoryRow[]): HistoryRow[] {
       }
     })
     .sort((a, b) => {
-      const dateDiff =
-        getSortableTimestamp(b.order?.order_date) -
-        getSortableTimestamp(a.order?.order_date)
+      const rankA = orderRankMap.get(a.order_id) ?? Number.MAX_SAFE_INTEGER
+      const rankB = orderRankMap.get(b.order_id) ?? Number.MAX_SAFE_INTEGER
 
-      if (dateDiff !== 0) return dateDiff
+      if (rankA !== rankB) return rankA - rankB
+      if (a.line_no !== b.line_no) return a.line_no - b.line_no
 
-      return b.line_no - a.line_no
+      return a.id.localeCompare(b.id)
     })
+    .slice(0, RECENT_ITEM_LIMIT)
 }
 
-function cleanText(value: string | null | undefined) {
-  return (value ?? '').replace(/\s+/g, ' ').trim()
-}
-
-function normaliseNameForNoCodeDedup(value: string) {
-  return cleanText(value).toLowerCase()
-}
-
-function scoreSuggestionName(name: string) {
-  const cleaned = cleanText(name)
-  const lower = cleaned.toLowerCase()
-
-  let score = 0
-
-  score += cleaned.length
-
-  if (lower.includes('approved liquidated')) score += 500
-  if (/\bapproved\b/.test(lower)) score += 100
-  if (/\bliquidated\b/.test(lower)) score += 100
-
-  const decimalMatches = cleaned.match(/\b\d+\.\d{1,2}\b/g)
-  if (decimalMatches) {
-    score += decimalMatches.length * 120
-  }
-
-  const packetCountMatches = cleaned.match(/\b\d+\s+packet\b/gi)
-  if (packetCountMatches) {
-    score += packetCountMatches.length * 50
-  }
-
-  return score
-}
-
-function choosePreferredSuggestion(rows: ItemSuggestion[]) {
-  const cleanedRows = rows
-    .map((row) => ({
-      item_no: cleanText(row.item_no),
-      item_name: cleanText(row.item_name),
-    }))
-    .filter((row) => row.item_no || row.item_name)
-
-  if (cleanedRows.length === 0) {
-    return {
-      item_no: '',
-      item_name: '',
-    }
-  }
-
-  const sorted = [...cleanedRows].sort((a, b) => {
-    const scoreDiff = scoreSuggestionName(a.item_name) - scoreSuggestionName(b.item_name)
-    if (scoreDiff !== 0) return scoreDiff
-
-    const nameLengthDiff = a.item_name.length - b.item_name.length
-    if (nameLengthDiff !== 0) return nameLengthDiff
-
-    return a.item_name.localeCompare(b.item_name, undefined, {
-      sensitivity: 'base',
-      numeric: true,
-    })
-  })
-
-  return sorted[0]
-}
-
-function dedupeSuggestions(rows: ItemSuggestion[]) {
-  const byCode = new Map<string, ItemSuggestion[]>()
-  const noCodeMap = new Map<string, ItemSuggestion>()
-
-  for (const row of rows) {
-    const itemNo = cleanText(row.item_no)
-    const itemName = cleanText(row.item_name)
-
-    if (!itemNo && !itemName) continue
-
-    if (itemNo) {
-      const existing = byCode.get(itemNo) ?? []
-      existing.push({
-        item_no: itemNo,
-        item_name: itemName,
-      })
-      byCode.set(itemNo, existing)
-      continue
-    }
-
-    const noCodeKey = normaliseNameForNoCodeDedup(itemName)
-    if (!noCodeMap.has(noCodeKey)) {
-      noCodeMap.set(noCodeKey, {
-        item_no: '',
-        item_name: itemName,
-      })
-    }
-  }
-
-  const dedupedByCode = Array.from(byCode.values()).map((group) =>
-    choosePreferredSuggestion(group)
-  )
-
-  const dedupedNoCode = Array.from(noCodeMap.values())
-
-  return [...dedupedByCode, ...dedupedNoCode].sort((a, b) => {
-    const nameCompare = a.item_name.localeCompare(b.item_name, undefined, {
-      sensitivity: 'base',
-      numeric: true,
-    })
-    if (nameCompare !== 0) return nameCompare
-
-    return a.item_no.localeCompare(b.item_no, undefined, {
-      sensitivity: 'base',
-      numeric: true,
-    })
-  })
-}
-
-export default function SearchMissingItemPage() {
+export default function RecentItemsPage() {
   const supabase = createClient()
 
-  const [query, setQuery] = useState('')
-  const [suggestions, setSuggestions] = useState<ItemSuggestion[]>([])
-  const [selectedItem, setSelectedItem] = useState<ItemSuggestion | null>(null)
-  const [historyRows, setHistoryRows] = useState<HistoryRow[]>([])
-  const [searching, setSearching] = useState(false)
-  const [loadingHistory, setLoadingHistory] = useState(false)
+  const [showCompleted, setShowCompleted] = useState(true)
+  const [historyRows, setHistoryRows] = useState<RecentRow[]>([])
+  const [loadingRecent, setLoadingRecent] = useState(true)
   const [statusMessage, setStatusMessage] = useState(
-    'Type an item name or item code, then click Search'
+    'Loading recent items...'
   )
 
   const autosaveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
@@ -283,6 +146,10 @@ export default function SearchMissingItemPage() {
     }
   }, [])
 
+  useEffect(() => {
+    void loadRecentItems(true)
+  }, [])
+
   function setTemporaryStatus(message: string) {
     setStatusMessage(message)
 
@@ -291,71 +158,47 @@ export default function SearchMissingItemPage() {
     }
 
     statusClearTimer.current = setTimeout(() => {
-      setStatusMessage('Ready')
+      setStatusMessage(getDefaultStatusMessage(showCompleted))
     }, 1800)
   }
 
-  async function handleSearch() {
-    const trimmed = query.trim()
-
-    if (!trimmed) {
-      setSuggestions([])
-      setSelectedItem(null)
-      setHistoryRows([])
-      setStatusMessage('Enter an item code or item name first')
-      return
-    }
-
-    setSearching(true)
-    setSelectedItem(null)
+  async function loadRecentItems(includeCompleted: boolean) {
+    setLoadingRecent(true)
     setHistoryRows([])
-    setSuggestions([])
-    setStatusMessage('Searching matching items...')
-
-    const [codeResult, nameResult] = await Promise.all([
-      supabase
-        .from('order_items')
-        .select('item_no, item_name')
-        .ilike('item_no', `%${trimmed}%`)
-        .limit(25),
-      supabase
-        .from('order_items')
-        .select('item_no, item_name')
-        .ilike('item_name', `%${trimmed}%`)
-        .limit(25),
-    ])
-
-    setSearching(false)
-
-    const firstError = codeResult.error || nameResult.error
-
-    if (firstError) {
-      setStatusMessage(`Search failed: ${firstError.message}`)
-      return
-    }
-
-    const merged = dedupeSuggestions([
-      ...((codeResult.data ?? []) as ItemSuggestion[]),
-      ...((nameResult.data ?? []) as ItemSuggestion[]),
-    ])
-
-    setSuggestions(merged)
-
-    if (merged.length === 0) {
-      setStatusMessage('No matching items found')
-      return
-    }
-
     setStatusMessage(
-      `Found ${merged.length} matching item${merged.length === 1 ? '' : 's'} — click the exact one`
+      includeCompleted
+        ? 'Loading recent items...'
+        : 'Loading recent items still needing action...'
     )
-  }
 
-  async function loadHistoryForSuggestion(suggestion: ItemSuggestion) {
-    setSelectedItem(suggestion)
-    setLoadingHistory(true)
-    setHistoryRows([])
-    setStatusMessage('Loading order history...')
+    const { data: ordersData, error: ordersError } = await supabase
+      .from('orders')
+      .select('id, requisition_number, po_number, order_date, order_date_sort')
+      .order('order_date_sort', { ascending: false, nullsFirst: false })
+      .order('order_date', { ascending: false, nullsFirst: false })
+      .order('requisition_number', { ascending: true, nullsFirst: false })
+      .order('id', { ascending: true })
+      .limit(RECENT_ORDER_LIMIT)
+
+    if (ordersError) {
+      setLoadingRecent(false)
+      setStatusMessage(`Failed to load recent orders: ${ordersError.message}`)
+      return
+    }
+
+    const recentOrders = (ordersData ?? []) as OrderSummary[]
+    const orderIds = recentOrders.map((order) => order.id)
+
+    if (orderIds.length === 0) {
+      setLoadingRecent(false)
+      setStatusMessage('No recent orders found')
+      return
+    }
+
+    const orderRankMap = new Map<string, number>()
+    recentOrders.forEach((order, index) => {
+      orderRankMap.set(order.id, index)
+    })
 
     let queryBuilder = supabase
       .from('order_items')
@@ -374,36 +217,42 @@ export default function SearchMissingItemPage() {
           id,
           requisition_number,
           po_number,
-          order_date
+          order_date,
+          order_date_sort
         )
       `)
+      .in('order_id', orderIds)
 
-    if (suggestion.item_no.trim()) {
-      queryBuilder = queryBuilder.eq('item_no', suggestion.item_no.trim())
-    } else {
-      queryBuilder = queryBuilder.eq('item_name', suggestion.item_name.trim())
+    if (!includeCompleted) {
+      queryBuilder = queryBuilder.or('complete.neq.true,follow_up.eq.true')
     }
 
-    const { data, error } = await queryBuilder
+    const { data: itemsData, error: itemsError } = await queryBuilder
 
-    setLoadingHistory(false)
+    setLoadingRecent(false)
 
-    if (error) {
-      setStatusMessage(`Failed to load order history: ${error.message}`)
+    if (itemsError) {
+      setStatusMessage(`Failed to load recent items: ${itemsError.message}`)
       return
     }
 
-    const normalised = normaliseHistoryRows((data ?? []) as RawHistoryRow[])
+    const normalised = normaliseRecentRows(
+      (itemsData ?? []) as RawRecentRow[],
+      orderRankMap
+    )
+
     setHistoryRows(normalised)
 
     if (normalised.length === 0) {
-      setStatusMessage('No historical orders found for that item')
+      setStatusMessage(
+        includeCompleted
+          ? 'No recent items found'
+          : 'No recent incomplete or follow-up items found'
+      )
       return
     }
 
-    setStatusMessage(
-      `Showing ${normalised.length} order row${normalised.length === 1 ? '' : 's'}`
-    )
+    setStatusMessage(getDefaultStatusMessage(includeCompleted))
   }
 
   async function syncParentOrderComplete(orderId: string) {
@@ -430,7 +279,7 @@ export default function SearchMissingItemPage() {
   }
 
   async function saveSingleHistoryRow(
-    row: HistoryRow,
+    row: RecentRow,
     successMessage: string
   ) {
     setStatusMessage(`Saving requisition ${row.order?.requisition_number ?? 'row'}...`)
@@ -462,7 +311,7 @@ export default function SearchMissingItemPage() {
     }
   }
 
-  function scheduleSave(row: HistoryRow, successMessage: string, delay = 700) {
+  function scheduleSave(row: RecentRow, successMessage: string, delay = 700) {
     if (autosaveTimers.current[row.id]) {
       clearTimeout(autosaveTimers.current[row.id])
     }
@@ -558,12 +407,10 @@ export default function SearchMissingItemPage() {
     })
   }
 
-  function clearSearch() {
-    setQuery('')
-    setSuggestions([])
-    setSelectedItem(null)
-    setHistoryRows([])
-    setStatusMessage('Type an item name or item code, then click Search')
+  async function handleToggleShowCompleted() {
+    const nextValue = !showCompleted
+    setShowCompleted(nextValue)
+    await loadRecentItems(nextValue)
   }
 
   return (
@@ -602,124 +449,53 @@ export default function SearchMissingItemPage() {
             fontSize: '16px',
           }}
         >
-          Search Missing Item
+          Recent Items
         </div>
       </div>
 
-      <h1 className="mb-6 text-2xl font-bold">Search Missing Item</h1>
+      <h1 className="mb-6 text-2xl font-bold">Recent Items</h1>
 
-      <div className="mb-4 text-sm text-gray-700">{statusMessage}</div>
-
-      <form
-        onSubmit={(e) => {
-          e.preventDefault()
-          void handleSearch()
-        }}
-        className="mb-6 flex flex-wrap items-center gap-3"
-      >
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search by item code or item name"
-          className="w-full max-w-xl rounded border bg-white p-3 text-black"
-        />
-
+      <div className="mb-4 flex flex-wrap items-center gap-3">
         <button
-          type="submit"
-          disabled={searching}
+          type="button"
+          onClick={() => void handleToggleShowCompleted()}
           style={{
-            backgroundColor: '#2563eb',
+            backgroundColor: showCompleted ? '#16a34a' : '#dc2626',
             color: '#ffffff',
-            border: '2px solid #1d4ed8',
+            border: showCompleted ? '2px solid #166534' : '2px solid #991b1b',
             borderRadius: '8px',
             padding: '10px 16px',
             fontWeight: 700,
             fontSize: '14px',
             lineHeight: 1.2,
             display: 'inline-block',
-            minWidth: '110px',
+            minWidth: '210px',
             textAlign: 'center',
-            cursor: searching ? 'not-allowed' : 'pointer',
-            opacity: searching ? 0.6 : 1,
+            cursor: 'pointer',
             boxShadow: '0 1px 2px rgba(0,0,0,0.15)',
           }}
         >
-          {searching ? 'Searching...' : 'Search'}
+          {showCompleted
+            ? 'Toggle Completed: ON'
+            : 'Toggle Completed: OFF'}
         </button>
 
         <button
           type="button"
-          onClick={clearSearch}
+          onClick={() => void loadRecentItems(showCompleted)}
           className="rounded border bg-white px-4 py-2 text-black"
         >
-          Clear
+          Refresh
         </button>
-      </form>
+      </div>
 
-      {suggestions.length > 0 && (
-        <div className="mb-8 rounded border bg-white p-4">
-          <h2 className="mb-3 text-lg font-semibold">
-            Matching Items — click the exact one
-          </h2>
+      <div className="mb-4 text-sm text-gray-700">{statusMessage}</div>
 
-          <div className="grid gap-3">
-            {suggestions.map((suggestion) => {
-              const key = `${suggestion.item_no}|||${suggestion.item_name}`
-              const isSelected =
-                selectedItem?.item_no === suggestion.item_no &&
-                selectedItem?.item_name === suggestion.item_name
-
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => void loadHistoryForSuggestion(suggestion)}
-                  style={{
-                    backgroundColor: isSelected ? '#dbeafe' : '#ffffff',
-                    color: '#111111',
-                    border: isSelected
-                      ? '2px solid #2563eb'
-                      : '1px solid #d1d5db',
-                    borderRadius: '8px',
-                    padding: '12px 14px',
-                    fontWeight: 600,
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <div>{suggestion.item_name || 'Unnamed item'}</div>
-                  <div
-                    style={{
-                      fontSize: '13px',
-                      color: '#4b5563',
-                      marginTop: '4px',
-                    }}
-                  >
-                    Code: {suggestion.item_no || '—'}
-                  </div>
-                </button>
-              )
-            })}
-          </div>
-        </div>
+      {loadingRecent && (
+        <div className="rounded border bg-white p-4">Loading recent items...</div>
       )}
 
-      {selectedItem && (
-        <div className="mb-4 rounded border bg-gray-50 p-4">
-          <div className="font-semibold">Selected Item</div>
-          <div className="mt-1">{selectedItem.item_name || 'Unnamed item'}</div>
-          <div className="text-sm text-gray-600">
-            Code: {selectedItem.item_no || '—'}
-          </div>
-        </div>
-      )}
-
-      {loadingHistory && (
-        <div className="rounded border bg-white p-4">Loading order history...</div>
-      )}
-
-      {!loadingHistory && selectedItem && (
+      {!loadingRecent && (
         <div className="overflow-x-auto rounded border bg-white">
           <table className="min-w-full border-collapse">
             <thead>
@@ -839,7 +615,7 @@ export default function SearchMissingItemPage() {
               {historyRows.length === 0 && (
                 <tr>
                   <td colSpan={11} className="p-6 text-center text-gray-500">
-                    No order history found for this item.
+                    No recent items found.
                   </td>
                 </tr>
               )}
