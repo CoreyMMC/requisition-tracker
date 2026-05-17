@@ -320,7 +320,15 @@ export default function OrdersTableClient({ initialOrders }: Props) {
   return (
     <main className="min-h-screen bg-white p-8 text-black">
       <div className="mb-6 flex flex-col gap-4">
-        <h1 className="text-2xl font-bold">Orders / Requisitions</h1>
+        <div>
+          <h1 className="text-4xl font-black tracking-tight">
+            Requisition Tracker V2.1
+          </h1>
+
+          <h2 className="mt-2 text-2xl font-bold">
+            Orders / Requisitions
+          </h2>
+        </div>
 
         <div className="flex flex-wrap gap-3">
           <button
