@@ -43,6 +43,13 @@ function sortByLineNo(rows: OrderItem[]) {
   return [...rows].sort((a, b) => a.line_no - b.line_no)
 }
 
+function autoResizeTextarea(element: HTMLTextAreaElement | null) {
+  if (!element) return
+
+  element.style.height = 'auto'
+  element.style.height = `${element.scrollHeight}px`
+}
+
 export default function OrderItemsTable({
   orderId,
   initialItems,
@@ -61,7 +68,9 @@ export default function OrderItemsTable({
   } | null>(null)
   const [cellDraft, setCellDraft] = useState('')
 
-  const autosaveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  const autosaveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>(
+    {}
+  )
   const statusClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -74,6 +83,16 @@ export default function OrderItemsTable({
       setCellDraft('')
     }
   }, [editMode])
+
+  useEffect(() => {
+    const commentBoxes = document.querySelectorAll<HTMLTextAreaElement>(
+      'textarea[data-autosize-comments="true"]'
+    )
+
+    commentBoxes.forEach((box) => {
+      autoResizeTextarea(box)
+    })
+  }, [items])
 
   useEffect(() => {
     return () => {
@@ -113,7 +132,9 @@ export default function OrderItemsTable({
       .eq('id', item.id)
 
     if (error) {
-      setStatusMessage(`Autosave failed on line ${item.line_no}: ${error.message}`)
+      setStatusMessage(
+        `Autosave failed on line ${item.line_no}: ${error.message}`
+      )
       return
     }
 
@@ -125,7 +146,9 @@ export default function OrderItemsTable({
       .eq('id', orderId)
 
     if (orderError) {
-      setStatusMessage(`Item saved, but order status failed: ${orderError.message}`)
+      setStatusMessage(
+        `Item saved, but order status failed: ${orderError.message}`
+      )
       return
     }
 
@@ -179,14 +202,20 @@ export default function OrderItemsTable({
     setSavingAll(false)
 
     if (orderError) {
-      setStatusMessage(`Items saved, but order status failed: ${orderError.message}`)
+      setStatusMessage(
+        `Items saved, but order status failed: ${orderError.message}`
+      )
       return
     }
 
     setTemporaryStatus(successMessage)
   }
 
-  function scheduleAutosave(item: OrderItem, allItems: OrderItem[], delay = 700) {
+  function scheduleAutosave(
+    item: OrderItem,
+    allItems: OrderItem[],
+    delay = 700
+  ) {
     if (autosaveTimers.current[item.id]) {
       clearTimeout(autosaveTimers.current[item.id])
     }
@@ -225,7 +254,9 @@ export default function OrderItemsTable({
     setAddingLine(false)
 
     if (error || !data) {
-      setStatusMessage(`Failed to add line: ${error?.message || 'Unknown error'}`)
+      setStatusMessage(
+        `Failed to add line: ${error?.message || 'Unknown error'}`
+      )
       return
     }
 
@@ -428,7 +459,9 @@ export default function OrderItemsTable({
         <input
           autoFocus
           type={
-            field === 'line_no' || field === 'qty_ordered' || field === 'amount_aud'
+            field === 'line_no' ||
+            field === 'qty_ordered' ||
+            field === 'amount_aud'
               ? 'number'
               : 'text'
           }
@@ -453,7 +486,9 @@ export default function OrderItemsTable({
     return (
       <span
         onDoubleClick={() => startCellEdit(item, field)}
-        className={editMode ? 'cursor-pointer rounded px-1 hover:bg-yellow-100' : ''}
+        className={
+          editMode ? 'cursor-pointer rounded px-1 hover:bg-yellow-100' : ''
+        }
         title={editMode ? 'Double click to edit' : undefined}
         style={{
           display: 'inline-block',
@@ -557,18 +592,31 @@ export default function OrderItemsTable({
                 <td className="p-3">
                   {renderEditableCell(item, 'line_no', String(item.line_no))}
                 </td>
+
                 <td className="p-3">
                   {renderEditableCell(item, 'item_no', item.item_no)}
                 </td>
+
                 <td className="p-3">
                   {renderEditableCell(item, 'item_name', item.item_name)}
                 </td>
+
                 <td className="p-3">
-                  {renderEditableCell(item, 'qty_ordered', String(item.qty_ordered))}
+                  {renderEditableCell(
+                    item,
+                    'qty_ordered',
+                    String(item.qty_ordered)
+                  )}
                 </td>
+
                 <td className="p-3">
-                  {renderEditableCell(item, 'amount_aud', formatCurrency(item.amount_aud))}
+                  {renderEditableCell(
+                    item,
+                    'amount_aud',
+                    formatCurrency(item.amount_aud)
+                  )}
                 </td>
+
                 <td className="p-3">
                   <input
                     type="number"
@@ -580,12 +628,11 @@ export default function OrderItemsTable({
                     }
                   />
                 </td>
+
                 <td className="p-3">
                   <button
                     type="button"
-                    onClick={() =>
-                      handleCompleteChange(item.id, !item.complete)
-                    }
+                    onClick={() => handleCompleteChange(item.id, !item.complete)}
                     title="Complete"
                     style={{
                       width: '20px',
@@ -594,7 +641,9 @@ export default function OrderItemsTable({
                       alignItems: 'center',
                       justifyContent: 'center',
                       borderRadius: '4px',
-                      border: item.complete ? '2px solid #166534' : '2px solid #9ca3af',
+                      border: item.complete
+                        ? '2px solid #166534'
+                        : '2px solid #9ca3af',
                       backgroundColor: item.complete ? '#16a34a' : '#ffffff',
                       color: item.complete ? '#ffffff' : 'transparent',
                       fontSize: '12px',
@@ -607,6 +656,7 @@ export default function OrderItemsTable({
                     ✓
                   </button>
                 </td>
+
                 <td className="p-3">
                   <button
                     type="button"
@@ -621,7 +671,9 @@ export default function OrderItemsTable({
                       alignItems: 'center',
                       justifyContent: 'center',
                       borderRadius: '4px',
-                      border: item.follow_up ? '2px solid #991b1b' : '2px solid #9ca3af',
+                      border: item.follow_up
+                        ? '2px solid #991b1b'
+                        : '2px solid #9ca3af',
                       backgroundColor: item.follow_up ? '#dc2626' : '#ffffff',
                       color: item.follow_up ? '#ffffff' : 'transparent',
                       fontSize: '12px',
@@ -634,14 +686,26 @@ export default function OrderItemsTable({
                     ✓
                   </button>
                 </td>
+
                 <td className="p-3">
-                  <input
-                    type="text"
-                    className="w-64 rounded border bg-white p-2 text-black"
+                  <textarea
+                    data-autosize-comments="true"
+                    className="w-64 min-h-[42px] resize-none rounded border bg-white p-2 text-black"
                     value={item.comments || ''}
-                    onChange={(e) =>
+                    rows={1}
+                    onChange={(e) => {
+                      autoResizeTextarea(e.currentTarget)
                       handleCommentsChange(item.id, e.target.value)
-                    }
+                    }}
+                    ref={(element) => {
+                      autoResizeTextarea(element)
+                    }}
+                    style={{
+                      overflow: 'hidden',
+                      overflowY: 'hidden',
+                      resize: 'none',
+                      whiteSpace: 'pre-wrap',
+                    }}
                   />
                 </td>
               </tr>

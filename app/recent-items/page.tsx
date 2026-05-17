@@ -4,8 +4,9 @@ import Link from 'next/link'
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 
-const RECENT_ORDER_LIMIT = 300
 const RECENT_ITEM_LIMIT = 300
+const ORDER_FETCH_PAGE_SIZE = 500
+const ITEM_FETCH_CHUNK_SIZE = 100
 
 type OrderSummary = {
   id: string
@@ -41,6 +42,7 @@ type RecentRow = {
   follow_up: boolean
   comments: string
   order: OrderSummary | null
+  order_rank: number
 }
 
 function pad2(value: number) {
@@ -76,51 +78,171 @@ function formatDateForDisplay(value: string | null | undefined) {
   return trimmed
 }
 
+function parseDateToTimestamp(value: string | null | undefined) {
+  if (!value) return 0
+
+  const trimmed = value.trim()
+
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (isoMatch) {
+    const year = Number(isoMatch[1])
+    const month = Number(isoMatch[2]) - 1
+    const day = Number(isoMatch[3])
+    return new Date(year, month, day).getTime()
+  }
+
+  const auMatch = trimmed.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2}|\d{4})$/)
+  if (auMatch) {
+    const day = Number(auMatch[1])
+    const month = Number(auMatch[2]) - 1
+    let year = Number(auMatch[3])
+
+    if (auMatch[3].length === 2) {
+      year += 2000
+    }
+
+    return new Date(year, month, day).getTime()
+  }
+
+  const fallback = new Date(trimmed).getTime()
+  return Number.isNaN(fallback) ? 0 : fallback
+}
+
+function compareNullableStringsAsc(
+  a: string | null | undefined,
+  b: string | null | undefined
+) {
+  const aValue = (a || '').trim()
+  const bValue = (b || '').trim()
+
+  const aEmpty = aValue.length === 0
+  const bEmpty = bValue.length === 0
+
+  if (aEmpty && bEmpty) return 0
+  if (aEmpty) return 1
+  if (bEmpty) return -1
+
+  return aValue.localeCompare(bValue, undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  })
+}
+
+function compareOrdersRecentFirst(a: OrderSummary, b: OrderSummary) {
+  const dateA = parseDateToTimestamp(a.order_date_sort || a.order_date)
+  const dateB = parseDateToTimestamp(b.order_date_sort || b.order_date)
+
+  const dateDifference = dateB - dateA
+  if (dateDifference !== 0) return dateDifference
+
+  const requisitionDifference = compareNullableStringsAsc(
+    a.requisition_number,
+    b.requisition_number
+  )
+  if (requisitionDifference !== 0) return requisitionDifference
+
+  return a.id.localeCompare(b.id)
+}
+
 function formatQty(value: number) {
   if (Number.isInteger(value)) return String(value)
   return String(value)
 }
 
-function getDefaultStatusMessage(showCompleted: boolean) {
-  return showCompleted
-    ? `Showing up to the last ${RECENT_ITEM_LIMIT} recent items`
-    : `Showing up to the last ${RECENT_ITEM_LIMIT} recent items that still need action`
+function autoResizeTextarea(element: HTMLTextAreaElement | null) {
+  if (!element) return
+
+  element.style.height = 'auto'
+  element.style.overflow = 'hidden'
+  element.style.overflowY = 'hidden'
+  element.style.resize = 'none'
+  element.style.height = `${element.scrollHeight}px`
+}
+
+function getDefaultStatusMessage(showCompleted: boolean, visibleCount: number) {
+  if (showCompleted) {
+    return `Showing ${visibleCount} most recent item${visibleCount === 1 ? '' : 's'}`
+  }
+
+  return `Showing ${visibleCount} most recent item${visibleCount === 1 ? '' : 's'} still needing action`
 }
 
 function normaliseRecentRows(
   rows: RawRecentRow[],
   orderRankMap: Map<string, number>
 ): RecentRow[] {
-  return rows
-    .map((row) => {
-      const orderValue = Array.isArray(row.order)
-        ? row.order[0] ?? null
-        : row.order ?? null
+  return rows.map((row) => {
+    const orderValue = Array.isArray(row.order)
+      ? row.order[0] ?? null
+      : row.order ?? null
 
-      return {
-        id: row.id,
-        order_id: row.order_id,
-        line_no: Number(row.line_no ?? 0),
-        item_no: row.item_no ?? '',
-        item_name: row.item_name ?? '',
-        qty_ordered: Number(row.qty_ordered ?? 0),
-        qty_received: Number(row.qty_received ?? 0),
-        complete: row.complete === true,
-        follow_up: row.follow_up === true,
-        comments: row.comments ?? '',
-        order: orderValue,
-      }
-    })
-    .sort((a, b) => {
-      const rankA = orderRankMap.get(a.order_id) ?? Number.MAX_SAFE_INTEGER
-      const rankB = orderRankMap.get(b.order_id) ?? Number.MAX_SAFE_INTEGER
+    return {
+      id: row.id,
+      order_id: row.order_id,
+      line_no: Number(row.line_no ?? 0),
+      item_no: row.item_no ?? '',
+      item_name: row.item_name ?? '',
+      qty_ordered: Number(row.qty_ordered ?? 0),
+      qty_received: Number(row.qty_received ?? 0),
+      complete: row.complete === true,
+      follow_up: row.follow_up === true,
+      comments: row.comments ?? '',
+      order: orderValue,
+      order_rank: orderRankMap.get(row.order_id) ?? Number.MAX_SAFE_INTEGER,
+    }
+  })
+}
 
-      if (rankA !== rankB) return rankA - rankB
-      if (a.line_no !== b.line_no) return a.line_no - b.line_no
+function sortRecentRows(rows: RecentRow[]) {
+  return [...rows].sort((a, b) => {
+    if (a.order_rank !== b.order_rank) {
+      return a.order_rank - b.order_rank
+    }
 
-      return a.id.localeCompare(b.id)
-    })
-    .slice(0, RECENT_ITEM_LIMIT)
+    if (a.line_no !== b.line_no) {
+      return a.line_no - b.line_no
+    }
+
+    return a.id.localeCompare(b.id)
+  })
+}
+
+async function fetchAllOrders(
+  supabase: ReturnType<typeof createClient>
+): Promise<OrderSummary[]> {
+  const allOrders: OrderSummary[] = []
+  let page = 0
+
+  while (true) {
+    const from = page * ORDER_FETCH_PAGE_SIZE
+    const to = from + ORDER_FETCH_PAGE_SIZE - 1
+
+    const { data, error } = await supabase
+      .from('orders')
+      .select('id, requisition_number, po_number, order_date, order_date_sort')
+      .order('id', { ascending: true })
+      .range(from, to)
+
+    if (error) {
+      throw new Error(error.message)
+    }
+
+    const batch = (data ?? []) as OrderSummary[]
+
+    if (batch.length === 0) {
+      break
+    }
+
+    allOrders.push(...batch)
+
+    if (batch.length < ORDER_FETCH_PAGE_SIZE) {
+      break
+    }
+
+    page += 1
+  }
+
+  return allOrders.sort(compareOrdersRecentFirst)
 }
 
 export default function RecentItemsPage() {
@@ -133,7 +255,9 @@ export default function RecentItemsPage() {
     'Loading recent items...'
   )
 
-  const autosaveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  const autosaveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>(
+    {}
+  )
   const statusClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -150,6 +274,16 @@ export default function RecentItemsPage() {
     void loadRecentItems(true)
   }, [])
 
+  useEffect(() => {
+    const commentBoxes = document.querySelectorAll<HTMLTextAreaElement>(
+      'textarea[data-autosize-comments="true"]'
+    )
+
+    commentBoxes.forEach((box) => {
+      autoResizeTextarea(box)
+    })
+  }, [historyRows])
+
   function setTemporaryStatus(message: string) {
     setStatusMessage(message)
 
@@ -158,7 +292,9 @@ export default function RecentItemsPage() {
     }
 
     statusClearTimer.current = setTimeout(() => {
-      setStatusMessage(getDefaultStatusMessage(showCompleted))
+      setStatusMessage(
+        getDefaultStatusMessage(showCompleted, historyRows.length)
+      )
     }, 1800)
   }
 
@@ -167,92 +303,100 @@ export default function RecentItemsPage() {
     setHistoryRows([])
     setStatusMessage(
       includeCompleted
-        ? 'Loading recent items...'
-        : 'Loading recent items still needing action...'
+        ? 'Loading most recent items...'
+        : 'Loading most recent items still needing action...'
     )
 
-    const { data: ordersData, error: ordersError } = await supabase
-      .from('orders')
-      .select('id, requisition_number, po_number, order_date, order_date_sort')
-      .order('order_date_sort', { ascending: false, nullsFirst: false })
-      .order('order_date', { ascending: false, nullsFirst: false })
-      .order('requisition_number', { ascending: true, nullsFirst: false })
-      .order('id', { ascending: true })
-      .limit(RECENT_ORDER_LIMIT)
+    try {
+      const sortedOrders = await fetchAllOrders(supabase)
 
-    if (ordersError) {
-      setLoadingRecent(false)
-      setStatusMessage(`Failed to load recent orders: ${ordersError.message}`)
-      return
-    }
+      if (sortedOrders.length === 0) {
+        setLoadingRecent(false)
+        setStatusMessage('No orders found')
+        return
+      }
 
-    const recentOrders = (ordersData ?? []) as OrderSummary[]
-    const orderIds = recentOrders.map((order) => order.id)
+      const orderRankMap = new Map<string, number>()
+      sortedOrders.forEach((order, index) => {
+        orderRankMap.set(order.id, index)
+      })
 
-    if (orderIds.length === 0) {
-      setLoadingRecent(false)
-      setStatusMessage('No recent orders found')
-      return
-    }
+      let collectedRows: RecentRow[] = []
 
-    const orderRankMap = new Map<string, number>()
-    recentOrders.forEach((order, index) => {
-      orderRankMap.set(order.id, index)
-    })
+      for (let i = 0; i < sortedOrders.length; i += ITEM_FETCH_CHUNK_SIZE) {
+        const chunkOrders = sortedOrders.slice(i, i + ITEM_FETCH_CHUNK_SIZE)
+        const orderIds = chunkOrders.map((order) => order.id)
 
-    let queryBuilder = supabase
-      .from('order_items')
-      .select(`
-        id,
-        order_id,
-        line_no,
-        item_no,
-        item_name,
-        qty_ordered,
-        qty_received,
-        complete,
-        follow_up,
-        comments,
-        order:orders!inner (
-          id,
-          requisition_number,
-          po_number,
-          order_date,
-          order_date_sort
+        let queryBuilder = supabase
+          .from('order_items')
+          .select(`
+            id,
+            order_id,
+            line_no,
+            item_no,
+            item_name,
+            qty_ordered,
+            qty_received,
+            complete,
+            follow_up,
+            comments,
+            order:orders!inner (
+              id,
+              requisition_number,
+              po_number,
+              order_date,
+              order_date_sort
+            )
+          `)
+          .in('order_id', orderIds)
+
+        if (!includeCompleted) {
+          queryBuilder = queryBuilder.or('complete.eq.false,complete.is.null')
+        }
+
+        const { data: itemsData, error: itemsError } = await queryBuilder
+
+        if (itemsError) {
+          throw new Error(itemsError.message)
+        }
+
+        const normalised = normaliseRecentRows(
+          (itemsData ?? []) as RawRecentRow[],
+          orderRankMap
         )
-      `)
-      .in('order_id', orderIds)
 
-    if (!includeCompleted) {
-      queryBuilder = queryBuilder.or('complete.neq.true,follow_up.eq.true')
-    }
+        collectedRows = sortRecentRows([...collectedRows, ...normalised])
 
-    const { data: itemsData, error: itemsError } = await queryBuilder
+        if (collectedRows.length >= RECENT_ITEM_LIMIT) {
+          break
+        }
+      }
 
-    setLoadingRecent(false)
+      const finalRows = sortRecentRows(collectedRows).slice(0, RECENT_ITEM_LIMIT)
 
-    if (itemsError) {
-      setStatusMessage(`Failed to load recent items: ${itemsError.message}`)
-      return
-    }
+      setHistoryRows(finalRows)
+      setLoadingRecent(false)
 
-    const normalised = normaliseRecentRows(
-      (itemsData ?? []) as RawRecentRow[],
-      orderRankMap
-    )
+      if (finalRows.length === 0) {
+        setStatusMessage(
+          includeCompleted
+            ? 'No recent items found'
+            : 'No recent incomplete or follow-up items found'
+        )
+        return
+      }
 
-    setHistoryRows(normalised)
-
-    if (normalised.length === 0) {
       setStatusMessage(
-        includeCompleted
-          ? 'No recent items found'
-          : 'No recent incomplete or follow-up items found'
+        getDefaultStatusMessage(includeCompleted, finalRows.length)
       )
-      return
+    } catch (error) {
+      setLoadingRecent(false)
+      setStatusMessage(
+        error instanceof Error
+          ? `Failed to load recent items: ${error.message}`
+          : 'Failed to load recent items'
+      )
     }
-
-    setStatusMessage(getDefaultStatusMessage(includeCompleted))
   }
 
   async function syncParentOrderComplete(orderId: string) {
@@ -266,7 +410,8 @@ export default function RecentItemsPage() {
     }
 
     const orderComplete =
-      (data ?? []).length > 0 && (data ?? []).every((row) => row.complete === true)
+      (data ?? []).length > 0 &&
+      (data ?? []).every((row) => row.complete === true)
 
     const { error: updateError } = await supabase
       .from('orders')
@@ -282,7 +427,9 @@ export default function RecentItemsPage() {
     row: RecentRow,
     successMessage: string
   ) {
-    setStatusMessage(`Saving requisition ${row.order?.requisition_number ?? 'row'}...`)
+    setStatusMessage(
+      `Saving requisition ${row.order?.requisition_number ?? 'row'}...`
+    )
 
     const { error } = await supabase
       .from('order_items')
@@ -595,13 +742,24 @@ export default function RecentItemsPage() {
                     </button>
                   </td>
                   <td className="p-3">
-                    <input
-                      type="text"
-                      className="w-72 rounded border bg-white p-2 text-black"
+                    <textarea
+                      data-autosize-comments="true"
+                      className="w-72 min-h-[42px] resize-none rounded border bg-white p-2 text-black"
                       value={row.comments}
-                      onChange={(e) =>
+                      rows={1}
+                      onChange={(e) => {
+                        autoResizeTextarea(e.currentTarget)
                         handleCommentsChange(row.id, e.target.value)
-                      }
+                      }}
+                      ref={(element) => {
+                        autoResizeTextarea(element)
+                      }}
+                      style={{
+                        overflow: 'hidden',
+                        overflowY: 'hidden',
+                        resize: 'none',
+                        whiteSpace: 'pre-wrap',
+                      }}
                     />
                   </td>
                   <td className="p-3">

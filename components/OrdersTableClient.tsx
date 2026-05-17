@@ -271,6 +271,13 @@ export default function OrdersTableClient({ initialOrders }: Props) {
     return [...orders].sort(compareOrders)
   }, [orders])
 
+  function handleBackToTop() {
+    window.scrollTo({
+      top: 0,
+      behavior: 'smooth',
+    })
+  }
+
   async function handleDeleteOrder(order: Order) {
     const label = order.requisition_number
       ? `requisition ${order.requisition_number}`
@@ -325,32 +332,32 @@ export default function OrdersTableClient({ initialOrders }: Props) {
           </button>
 
           <Link
-  href="/orders/new"
-  className="rounded bg-black px-4 py-2 text-white"
->
-  Manual Order Entry
-</Link>
+            href="/orders/new"
+            className="rounded bg-black px-4 py-2 text-white"
+          >
+            Manual Order Entry
+          </Link>
 
-<Link
-  href="/upload"
-  style={{
-    backgroundColor: '#22c55e',
-    color: '#111111',
-    border: '4px solid #166534',
-    borderRadius: '10px',
-    padding: '14px 22px',
-    fontWeight: 900,
-    fontSize: '16px',
-    lineHeight: 1.1,
-    display: 'inline-block',
-    textAlign: 'center',
-    textDecoration: 'none',
-    boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-    letterSpacing: '0.4px',
-  }}
->
-  UPLOAD PDF
-</Link>
+          <Link
+            href="/upload"
+            style={{
+              backgroundColor: '#22c55e',
+              color: '#111111',
+              border: '4px solid #166534',
+              borderRadius: '10px',
+              padding: '14px 22px',
+              fontWeight: 900,
+              fontSize: '16px',
+              lineHeight: 1.1,
+              display: 'inline-block',
+              textAlign: 'center',
+              textDecoration: 'none',
+              boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+              letterSpacing: '0.4px',
+            }}
+          >
+            UPLOAD PDF
+          </Link>
 
           <Link
             href="/recent-items"
@@ -588,6 +595,30 @@ export default function OrdersTableClient({ initialOrders }: Props) {
           </tbody>
         </table>
       </div>
+
+      <button
+        type="button"
+        onClick={handleBackToTop}
+        aria-label="Back to top"
+        style={{
+          position: 'fixed',
+          right: '24px',
+          bottom: '24px',
+          zIndex: 9999,
+          backgroundColor: '#111111',
+          color: '#ffffff',
+          border: '2px solid #000000',
+          borderRadius: '9999px',
+          padding: '12px 18px',
+          fontWeight: 800,
+          fontSize: '14px',
+          lineHeight: 1,
+          cursor: 'pointer',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.25)',
+        }}
+      >
+        ↑ Back to top
+      </button>
     </main>
   )
 }

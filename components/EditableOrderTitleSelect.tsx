@@ -12,6 +12,8 @@ const ORDER_TYPE_OPTIONS = [
   'General Stock',
   'Non-catalogue',
   'PSA Stock',
+  'WINC',
+  'Allanby',
   'Name Badges',
   'Other',
 ]
@@ -32,6 +34,14 @@ function parseOrderType(value: string | null | undefined) {
 
   if (raw === 'PSA Stock') {
     return { selectValue: 'PSA Stock', extraValue: '' }
+  }
+
+  if (raw === 'WINC') {
+    return { selectValue: 'WINC', extraValue: '' }
+  }
+
+  if (raw === 'Allanby') {
+    return { selectValue: 'Allanby', extraValue: '' }
   }
 
   if (raw === 'Name Badges') {
@@ -120,6 +130,18 @@ export default function EditableOrderTitleSelect({
     if (nextValue === 'PSA Stock') {
       setExtraValue('')
       void saveValue('PSA Stock')
+      return
+    }
+
+    if (nextValue === 'WINC') {
+      setExtraValue('')
+      void saveValue('WINC')
+      return
+    }
+
+    if (nextValue === 'Allanby') {
+      setExtraValue('')
+      void saveValue('Allanby')
       return
     }
 

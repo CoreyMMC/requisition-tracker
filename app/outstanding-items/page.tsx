@@ -137,6 +137,16 @@ function formatQty(value: number) {
   return String(value)
 }
 
+function autoResizeTextarea(element: HTMLTextAreaElement | null) {
+  if (!element) return
+
+  element.style.height = 'auto'
+  element.style.overflow = 'hidden'
+  element.style.overflowY = 'hidden'
+  element.style.resize = 'none'
+  element.style.height = `${element.scrollHeight}px`
+}
+
 function getThresholdHeading(days: ThresholdDays) {
   if (days === 7) return 'Items not arrived exceeding 7 days'
   if (days === 14) return 'Items not arrived exceeding 14 days'
@@ -165,13 +175,14 @@ function normaliseOutstandingRows(rows: RawOutstandingRow[]): OutstandingRow[] {
   })
 }
 
-function sortOutstandingRows(
-  rows: OutstandingRow[],
-  sortMode: SortMode
-) {
+function sortOutstandingRows(rows: OutstandingRow[], sortMode: SortMode) {
   return [...rows].sort((a, b) => {
-    const dateA = parseDateToTimestamp(a.order?.order_date_sort || a.order?.order_date)
-    const dateB = parseDateToTimestamp(b.order?.order_date_sort || b.order?.order_date)
+    const dateA = parseDateToTimestamp(
+      a.order?.order_date_sort || a.order?.order_date
+    )
+    const dateB = parseDateToTimestamp(
+      b.order?.order_date_sort || b.order?.order_date
+    )
 
     if (!Number.isNaN(dateA) && !Number.isNaN(dateB) && dateA !== dateB) {
       return sortMode === 'recent_to_oldest' ? dateB - dateA : dateA - dateB
@@ -201,9 +212,13 @@ export default function OutstandingItemsPage() {
   const [sortMode, setSortMode] = useState<SortMode>('recent_to_oldest')
   const [historyRows, setHistoryRows] = useState<OutstandingRow[]>([])
   const [loadingOutstanding, setLoadingOutstanding] = useState(true)
-  const [statusMessage, setStatusMessage] = useState('Loading outstanding items...')
+  const [statusMessage, setStatusMessage] = useState(
+    'Loading outstanding items...'
+  )
 
-  const autosaveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  const autosaveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>(
+    {}
+  )
   const statusClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -219,6 +234,16 @@ export default function OutstandingItemsPage() {
   useEffect(() => {
     void loadOutstandingItems(activeThreshold)
   }, [])
+
+  useEffect(() => {
+    const commentBoxes = document.querySelectorAll<HTMLTextAreaElement>(
+      'textarea[data-autosize-comments="true"]'
+    )
+
+    commentBoxes.forEach((box) => {
+      autoResizeTextarea(box)
+    })
+  }, [historyRows, sortMode])
 
   const sortedHistoryRows = useMemo(() => {
     return sortOutstandingRows(historyRows, sortMode)
@@ -239,7 +264,9 @@ export default function OutstandingItemsPage() {
   async function loadOutstandingItems(thresholdDays: ThresholdDays) {
     setLoadingOutstanding(true)
     setHistoryRows([])
-    setStatusMessage(`Loading items not arrived exceeding ${thresholdDays} days...`)
+    setStatusMessage(
+      `Loading items not arrived exceeding ${thresholdDays} days...`
+    )
 
     const { data, error } = await supabase
       .from('order_items')
@@ -271,7 +298,9 @@ export default function OutstandingItemsPage() {
       return
     }
 
-    const normalised = normaliseOutstandingRows((data ?? []) as RawOutstandingRow[])
+    const normalised = normaliseOutstandingRows(
+      (data ?? []) as RawOutstandingRow[]
+    )
 
     const filtered = normalised.filter((row) => {
       if (row.complete) return false
@@ -283,7 +312,9 @@ export default function OutstandingItemsPage() {
     setHistoryRows(filtered)
 
     if (filtered.length === 0) {
-      setStatusMessage(`No outstanding items found exceeding ${thresholdDays} days`)
+      setStatusMessage(
+        `No outstanding items found exceeding ${thresholdDays} days`
+      )
       return
     }
 
@@ -301,7 +332,8 @@ export default function OutstandingItemsPage() {
     }
 
     const orderComplete =
-      (data ?? []).length > 0 && (data ?? []).every((row) => row.complete === true)
+      (data ?? []).length > 0 &&
+      (data ?? []).every((row) => row.complete === true)
 
     const { error: updateError } = await supabase
       .from('orders')
@@ -317,7 +349,9 @@ export default function OutstandingItemsPage() {
     row: OutstandingRow,
     successMessage: string
   ) {
-    setStatusMessage(`Saving requisition ${row.order?.requisition_number ?? 'row'}...`)
+    setStatusMessage(
+      `Saving requisition ${row.order?.requisition_number ?? 'row'}...`
+    )
 
     const { error } = await supabase
       .from('order_items')
@@ -346,7 +380,11 @@ export default function OutstandingItemsPage() {
     }
   }
 
-  function scheduleSave(row: OutstandingRow, successMessage: string, delay = 700) {
+  function scheduleSave(
+    row: OutstandingRow,
+    successMessage: string,
+    delay = 700
+  ) {
     if (autosaveTimers.current[row.id]) {
       clearTimeout(autosaveTimers.current[row.id])
     }
@@ -515,7 +553,9 @@ export default function OutstandingItemsPage() {
               style={{
                 backgroundColor: isActive ? '#16a34a' : '#ffffff',
                 color: isActive ? '#ffffff' : '#111111',
-                border: isActive ? '2px solid #166534' : '2px solid #111111',
+                border: isActive
+                  ? '2px solid #166534'
+                  : '2px solid #111111',
                 borderRadius: '8px',
                 padding: '10px 16px',
                 fontWeight: 700,
@@ -541,9 +581,13 @@ export default function OutstandingItemsPage() {
           type="button"
           onClick={() => setSortMode('recent_to_oldest')}
           style={{
-            backgroundColor: sortMode === 'recent_to_oldest' ? '#16a34a' : '#ffffff',
+            backgroundColor:
+              sortMode === 'recent_to_oldest' ? '#16a34a' : '#ffffff',
             color: sortMode === 'recent_to_oldest' ? '#ffffff' : '#111111',
-            border: sortMode === 'recent_to_oldest' ? '2px solid #166534' : '2px solid #111111',
+            border:
+              sortMode === 'recent_to_oldest'
+                ? '2px solid #166534'
+                : '2px solid #111111',
             borderRadius: '8px',
             padding: '10px 16px',
             fontWeight: 700,
@@ -563,9 +607,13 @@ export default function OutstandingItemsPage() {
           type="button"
           onClick={() => setSortMode('oldest_to_recent')}
           style={{
-            backgroundColor: sortMode === 'oldest_to_recent' ? '#16a34a' : '#ffffff',
+            backgroundColor:
+              sortMode === 'oldest_to_recent' ? '#16a34a' : '#ffffff',
             color: sortMode === 'oldest_to_recent' ? '#ffffff' : '#111111',
-            border: sortMode === 'oldest_to_recent' ? '2px solid #166534' : '2px solid #111111',
+            border:
+              sortMode === 'oldest_to_recent'
+                ? '2px solid #166534'
+                : '2px solid #111111',
             borderRadius: '8px',
             padding: '10px 16px',
             fontWeight: 700,
@@ -698,13 +746,24 @@ export default function OutstandingItemsPage() {
                     </button>
                   </td>
                   <td className="p-3">
-                    <input
-                      type="text"
-                      className="w-72 rounded border bg-white p-2 text-black"
+                    <textarea
+                      data-autosize-comments="true"
+                      className="w-72 min-h-[42px] resize-none rounded border bg-white p-2 text-black"
                       value={row.comments}
-                      onChange={(e) =>
+                      rows={1}
+                      onChange={(e) => {
+                        autoResizeTextarea(e.currentTarget)
                         handleCommentsChange(row.id, e.target.value)
-                      }
+                      }}
+                      ref={(element) => {
+                        autoResizeTextarea(element)
+                      }}
+                      style={{
+                        overflow: 'hidden',
+                        overflowY: 'hidden',
+                        resize: 'none',
+                        whiteSpace: 'pre-wrap',
+                      }}
                     />
                   </td>
                   <td className="p-3">
