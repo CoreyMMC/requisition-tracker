@@ -12,6 +12,7 @@ export default function NewOrderPage() {
   const [poNumber, setPoNumber] = useState('')
   const [orderDate, setOrderDate] = useState('')
   const [enteredBy, setEnteredBy] = useState('')
+  const [selectedLevel, setSelectedLevel] = useState<3 | 5>(3)
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -26,6 +27,7 @@ export default function NewOrderPage() {
       order_date: orderDate || null,
       entered_by: enteredBy || null,
       order_complete: false,
+      level: selectedLevel,
     })
 
     setLoading(false)
@@ -85,13 +87,31 @@ export default function NewOrderPage() {
           />
         </div>
 
-        <button
-          type="submit"
-          disabled={loading}
-          className="rounded bg-black px-4 py-3 text-white disabled:opacity-50"
-        >
-          {loading ? 'Saving...' : 'Create Order'}
-        </button>
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="submit"
+            disabled={loading}
+            className="rounded bg-black px-4 py-3 font-bold text-white disabled:opacity-50"
+          >
+            {loading ? 'Saving...' : 'Create Order'}
+          </button>
+
+          <span className="font-bold">Level:</span>
+          {([3, 5] as const).map((level) => (
+            <button
+              key={level}
+              type="button"
+              onClick={() => setSelectedLevel(level)}
+              disabled={loading}
+              aria-pressed={selectedLevel === level}
+              className={`rounded-lg border-[3px] border-black px-4 py-3 font-bold text-black disabled:opacity-50 ${
+                selectedLevel === level ? 'bg-yellow-400' : 'bg-white'
+              }`}
+            >
+              {selectedLevel === level ? '✓ ' : ''}Level {level}
+            </button>
+          ))}
+        </div>
 
         {message && <p className="text-sm text-red-600">{message}</p>}
       </form>

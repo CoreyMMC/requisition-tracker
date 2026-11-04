@@ -60,6 +60,7 @@ export default function UploadPage() {
 
   const [duplicateModalOpen, setDuplicateModalOpen] = useState(false)
   const [duplicateMessage, setDuplicateMessage] = useState('')
+  const [selectedLevel, setSelectedLevel] = useState<3 | 5>(3)
 
   function handleSelectedFile(file: File | null) {
     if (!file) return
@@ -189,6 +190,7 @@ export default function UploadPage() {
           header: parsedHeader,
           items: parsedItems,
           title: null,
+          level: selectedLevel,
           overrideDuplicate,
         }),
       })
@@ -392,23 +394,49 @@ export default function UploadPage() {
         </button>
 
         {parsedHeader && (
-          <button
-            type="button"
-            onClick={() => void handleImportOrder(false)}
-            disabled={importing}
-            style={{
-              padding: '10px 18px',
-              fontSize: 16,
-              cursor: importing ? 'not-allowed' : 'pointer',
-              border: '2px solid #1d4ed8',
-              borderRadius: 8,
-              background: '#2563eb',
-              color: 'white',
-              fontWeight: 700,
-            }}
-          >
-            {importing ? 'Importing...' : 'Import Order'}
-          </button>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
+            <button
+              type="button"
+              onClick={() => void handleImportOrder(false)}
+              disabled={importing}
+              style={{
+                padding: '10px 18px',
+                fontSize: 16,
+                cursor: importing ? 'not-allowed' : 'pointer',
+                border: '2px solid #1d4ed8',
+                borderRadius: 8,
+                background: '#2563eb',
+                color: 'white',
+                fontWeight: 700,
+              }}
+            >
+              {importing ? 'Importing...' : 'Import Order'}
+            </button>
+
+            <strong style={{ color: '#111111' }}>Import to:</strong>
+            {([3, 5] as const).map((level) => (
+              <button
+                key={level}
+                type="button"
+                aria-pressed={selectedLevel === level}
+                onClick={() => setSelectedLevel(level)}
+                disabled={importing}
+                style={{
+                  padding: '10px 16px',
+                  fontSize: 16,
+                  fontWeight: 800,
+                  border: '3px solid #111111',
+                  borderRadius: 8,
+                  background: selectedLevel === level ? '#facc15' : '#ffffff',
+                  color: '#111111',
+                  cursor: importing ? 'not-allowed' : 'pointer',
+                  opacity: importing ? 0.6 : 1,
+                }}
+              >
+                {selectedLevel === level ? '✓ ' : ''}Level {level}
+              </button>
+            ))}
+          </div>
         )}
       </div>
 

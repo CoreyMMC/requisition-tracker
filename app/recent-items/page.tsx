@@ -8,12 +8,15 @@ const RECENT_ITEM_LIMIT = 300
 const ORDER_FETCH_PAGE_SIZE = 500
 const ITEM_FETCH_CHUNK_SIZE = 100
 
+type LevelFilter = 'both' | 3 | 5
+
 type OrderSummary = {
   id: string
   requisition_number: string | null
   po_number: string | null
   order_date: string | null
   order_date_sort: string | null
+  level: number | null
 }
 
 type RawRecentRow = {
@@ -26,6 +29,7 @@ type RawRecentRow = {
   qty_received: number | string | null
   complete: boolean | null
   follow_up: boolean | null
+  back_order: boolean | null
   comments: string | null
   order: OrderSummary | OrderSummary[] | null
 }
@@ -40,6 +44,7 @@ type RecentRow = {
   qty_received: number
   complete: boolean
   follow_up: boolean
+  back_order: boolean
   comments: string
   order: OrderSummary | null
   order_rank: number
@@ -186,6 +191,7 @@ function normaliseRecentRows(
       qty_received: Number(row.qty_received ?? 0),
       complete: row.complete === true,
       follow_up: row.follow_up === true,
+      back_order: row.back_order === true,
       comments: row.comments ?? '',
       order: orderValue,
       order_rank: orderRankMap.get(row.order_id) ?? Number.MAX_SAFE_INTEGER,
@@ -219,7 +225,7 @@ async function fetchAllOrders(
 
     const { data, error } = await supabase
       .from('orders')
-      .select('id, requisition_number, po_number, order_date, order_date_sort')
+      .select('id, requisition_number, po_number, order_date, order_date_sort, level')
       .order('id', { ascending: true })
       .range(from, to)
 
@@ -249,6 +255,7 @@ export default function RecentItemsPage() {
   const supabase = createClient()
 
   const [showCompleted, setShowCompleted] = useState(true)
+  const [selectedLevel, setSelectedLevel] = useState<LevelFilter>('both')
   const [historyRows, setHistoryRows] = useState<RecentRow[]>([])
   const [loadingRecent, setLoadingRecent] = useState(true)
   const [statusMessage, setStatusMessage] = useState(
@@ -271,7 +278,7 @@ export default function RecentItemsPage() {
   }, [])
 
   useEffect(() => {
-    void loadRecentItems(true)
+    void loadRecentItems(true, 'both')
   }, [])
 
   useEffect(() => {
@@ -282,7 +289,7 @@ export default function RecentItemsPage() {
     commentBoxes.forEach((box) => {
       autoResizeTextarea(box)
     })
-  }, [historyRows])
+  }, [loadingRecent, historyRows.length])
 
   function setTemporaryStatus(message: string) {
     setStatusMessage(message)
@@ -298,7 +305,10 @@ export default function RecentItemsPage() {
     }, 1800)
   }
 
-  async function loadRecentItems(includeCompleted: boolean) {
+  async function loadRecentItems(
+    includeCompleted: boolean,
+    levelFilter: LevelFilter
+  ) {
     setLoadingRecent(true)
     setHistoryRows([])
     setStatusMessage(
@@ -308,11 +318,16 @@ export default function RecentItemsPage() {
     )
 
     try {
-      const sortedOrders = await fetchAllOrders(supabase)
+      const allOrders = await fetchAllOrders(supabase)
+      const sortedOrders = allOrders.filter(
+        (order) => levelFilter === 'both' || order.level === levelFilter
+      )
 
       if (sortedOrders.length === 0) {
         setLoadingRecent(false)
-        setStatusMessage('No orders found')
+        setStatusMessage(
+          levelFilter === 'both' ? 'No orders found' : `No Level ${levelFilter} orders found`
+        )
         return
       }
 
@@ -339,13 +354,15 @@ export default function RecentItemsPage() {
             qty_received,
             complete,
             follow_up,
+            back_order,
             comments,
             order:orders!inner (
               id,
               requisition_number,
               po_number,
               order_date,
-              order_date_sort
+              order_date_sort,
+              level
             )
           `)
           .in('order_id', orderIds)
@@ -437,6 +454,7 @@ export default function RecentItemsPage() {
         qty_received: row.qty_received,
         complete: row.complete,
         follow_up: row.follow_up,
+        back_order: row.back_order,
         comments: row.comments,
       })
       .eq('id', row.id)
@@ -539,6 +557,21 @@ export default function RecentItemsPage() {
     })
   }
 
+  function handleBackOrderToggle(rowId: string) {
+    setHistoryRows((prev) => {
+      const updated = prev.map((row) =>
+        row.id === rowId ? { ...row, back_order: !row.back_order } : row
+      )
+
+      const changedRow = updated.find((row) => row.id === rowId)
+      if (changedRow) {
+        scheduleSave(changedRow, `Saved ${changedRow.item_name}`, 150)
+      }
+
+      return updated
+    })
+  }
+
   function handleCommentsChange(rowId: string, value: string) {
     setHistoryRows((prev) => {
       const updated = prev.map((row) =>
@@ -557,7 +590,7 @@ export default function RecentItemsPage() {
   async function handleToggleShowCompleted() {
     const nextValue = !showCompleted
     setShowCompleted(nextValue)
-    await loadRecentItems(nextValue)
+    await loadRecentItems(nextValue, selectedLevel)
   }
 
   return (
@@ -629,11 +662,45 @@ export default function RecentItemsPage() {
 
         <button
           type="button"
-          onClick={() => void loadRecentItems(showCompleted)}
+          onClick={() => void loadRecentItems(showCompleted, selectedLevel)}
           className="rounded border bg-white px-4 py-2 text-black"
         >
           Refresh
         </button>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-bold">Show level:</span>
+          {([3, 5, 'both'] as const).map((levelOption) => {
+            const isSelected = selectedLevel === levelOption
+            const label = levelOption === 'both' ? 'Both Levels' : `Level ${levelOption}`
+
+            return (
+              <button
+                key={levelOption}
+                type="button"
+                onClick={() => {
+                  setSelectedLevel(levelOption)
+                  void loadRecentItems(showCompleted, levelOption)
+                }}
+                disabled={loadingRecent}
+                aria-pressed={isSelected}
+                style={{
+                  backgroundColor: isSelected ? '#facc15' : '#ffffff',
+                  color: '#111111',
+                  border: '3px solid #111111',
+                  borderRadius: '8px',
+                  padding: '10px 16px',
+                  fontWeight: 800,
+                  fontSize: '14px',
+                  cursor: loadingRecent ? 'wait' : 'pointer',
+                  opacity: loadingRecent ? 0.8 : 1,
+                }}
+              >
+                {isSelected ? '✓ ' : ''}{label}
+              </button>
+            )
+          })}
+        </div>
       </div>
 
       <div className="mb-4 text-sm text-gray-700">{statusMessage}</div>
@@ -648,6 +715,7 @@ export default function RecentItemsPage() {
             <thead>
               <tr className="border-b bg-gray-100 text-left text-black">
                 <th className="p-3 font-semibold">Req No.</th>
+                <th className="p-3 font-semibold">Level</th>
                 <th className="p-3 font-semibold">PO No.</th>
                 <th className="p-3 font-semibold">Item</th>
                 <th className="p-3 font-semibold">Code</th>
@@ -656,6 +724,7 @@ export default function RecentItemsPage() {
                 <th className="p-3 font-semibold">Date Ordered</th>
                 <th className="p-3 font-semibold">Complete</th>
                 <th className="p-3 font-semibold">Follow Up</th>
+                <th className="p-3 font-semibold">Back Order</th>
                 <th className="p-3 font-semibold">Comments</th>
                 <th className="p-3 font-semibold">Open Order</th>
               </tr>
@@ -668,6 +737,7 @@ export default function RecentItemsPage() {
                   className="border-b align-top bg-white text-black even:bg-gray-50"
                 >
                   <td className="p-3">{row.order?.requisition_number || '—'}</td>
+                  <td className="p-3">{row.order?.level ? `Level ${row.order.level}` : '—'}</td>
                   <td className="p-3">{row.order?.po_number || '—'}</td>
                   <td className="p-3">{row.item_name || '—'}</td>
                   <td className="p-3">{row.item_no || '—'}</td>
@@ -742,6 +812,35 @@ export default function RecentItemsPage() {
                     </button>
                   </td>
                   <td className="p-3">
+                    <button
+                      type="button"
+                      onClick={() => handleBackOrderToggle(row.id)}
+                      title="Back Order"
+                      aria-label="Back Order"
+                      aria-pressed={row.back_order}
+                      style={{
+                        width: '20px',
+                        height: '20px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        borderRadius: '4px',
+                        border: row.back_order
+                          ? '2px solid #c2410c'
+                          : '2px solid #9ca3af',
+                        backgroundColor: row.back_order ? '#f97316' : '#ffffff',
+                        color: row.back_order ? '#ffffff' : 'transparent',
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        lineHeight: 1,
+                        cursor: 'pointer',
+                        padding: 0,
+                      }}
+                    >
+                      ✓
+                    </button>
+                  </td>
+                  <td className="p-3">
                     <textarea
                       data-autosize-comments="true"
                       className="w-72 min-h-[42px] resize-none rounded border bg-white p-2 text-black"
@@ -750,9 +849,6 @@ export default function RecentItemsPage() {
                       onChange={(e) => {
                         autoResizeTextarea(e.currentTarget)
                         handleCommentsChange(row.id, e.target.value)
-                      }}
-                      ref={(element) => {
-                        autoResizeTextarea(element)
                       }}
                       style={{
                         overflow: 'hidden',
@@ -772,7 +868,7 @@ export default function RecentItemsPage() {
 
               {historyRows.length === 0 && (
                 <tr>
-                  <td colSpan={11} className="p-6 text-center text-gray-500">
+                  <td colSpan={13} className="p-6 text-center text-gray-500">
                     No recent items found.
                   </td>
                 </tr>

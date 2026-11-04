@@ -37,6 +37,7 @@ export default function ImportOrderPage() {
   const [fileName, setFileName] = useState('')
 
   const [duplicateMessage, setDuplicateMessage] = useState('')
+  const [selectedLevel, setSelectedLevel] = useState<3 | 5>(3)
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -113,6 +114,7 @@ export default function ImportOrderPage() {
           header: parsedHeader,
           items: parsedItems,
           title: null,
+          level: selectedLevel,
           overrideDuplicate,
         }),
       })
@@ -141,9 +143,9 @@ export default function ImportOrderPage() {
       }
 
       if (data?.overridden) {
-        setMessage(`Success: Requisition ${parsedHeader.requisition_no} was overridden and re-imported.`)
+        setMessage(`Success: Requisition ${parsedHeader.requisition_no} was overridden and re-imported to Level ${selectedLevel}.`)
       } else {
-        setMessage(`Success: Requisition ${parsedHeader.requisition_no} imported successfully.`)
+        setMessage(`Success: Requisition ${parsedHeader.requisition_no} imported successfully to Level ${selectedLevel}.`)
       }
 
       setDuplicateMessage('')
@@ -267,23 +269,61 @@ export default function ImportOrderPage() {
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => void handleImport(false)}
-            disabled={importing}
+          <div
             style={{
-              backgroundColor: '#111111',
-              color: '#ffffff',
-              border: '1px solid #111111',
-              borderRadius: '8px',
-              padding: '10px 16px',
-              fontWeight: 700,
-              cursor: importing ? 'not-allowed' : 'pointer',
-              opacity: importing ? 0.6 : 1,
+              display: 'flex',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: '16px',
             }}
           >
-            {importing ? 'Importing...' : 'Import Order'}
-          </button>
+            <button
+              type="button"
+              onClick={() => void handleImport(false)}
+              disabled={importing}
+              style={{
+                backgroundColor: '#111111',
+                color: '#ffffff',
+                border: '1px solid #111111',
+                borderRadius: '8px',
+                padding: '10px 16px',
+                fontWeight: 700,
+                cursor: importing ? 'not-allowed' : 'pointer',
+                opacity: importing ? 0.6 : 1,
+              }}
+            >
+              {importing ? 'Importing...' : 'Import Order'}
+            </button>
+
+            <div
+              role="group"
+              aria-label="Select destination level"
+              style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}
+            >
+              <strong style={{ color: '#111111' }}>Level:</strong>
+              {([3, 5] as const).map((level) => (
+                <button
+                  key={level}
+                  type="button"
+                  aria-pressed={selectedLevel === level}
+                  disabled={importing}
+                  onClick={() => setSelectedLevel(level)}
+                  style={{
+                    backgroundColor: selectedLevel === level ? '#facc15' : '#ffffff',
+                    color: '#111111',
+                    border: '2px solid #111111',
+                    borderRadius: '8px',
+                    padding: '10px 16px',
+                    fontWeight: 800,
+                    cursor: importing ? 'not-allowed' : 'pointer',
+                    opacity: importing ? 0.6 : 1,
+                  }}
+                >
+                  {selectedLevel === level ? '✓ ' : ''}Level {level}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       )}
     </main>

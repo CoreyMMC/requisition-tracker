@@ -14,6 +14,7 @@ type OrderItem = {
   qty_received: number
   complete: boolean
   follow_up: boolean
+  back_order?: boolean | null
   comments: string | null
 }
 
@@ -127,6 +128,7 @@ export default function OrderItemsTable({
         qty_received: item.qty_received,
         complete: item.complete,
         follow_up: item.follow_up,
+        back_order: item.back_order === true,
         comments: item.comments,
       })
       .eq('id', item.id)
@@ -178,6 +180,7 @@ export default function OrderItemsTable({
             qty_received: item.qty_received,
             complete: item.complete,
             follow_up: item.follow_up,
+            back_order: item.back_order === true,
             comments: item.comments,
           })
           .eq('id', item.id)
@@ -242,6 +245,7 @@ export default function OrderItemsTable({
       qty_received: 0,
       complete: false,
       follow_up: false,
+      back_order: false,
       comments: '',
     }
 
@@ -330,6 +334,21 @@ export default function OrderItemsTable({
     setItems((prev) => {
       const updated = prev.map((item) =>
         item.id === id ? { ...item, follow_up: checked } : item
+      )
+
+      const changedItem = updated.find((item) => item.id === id)
+      if (changedItem) {
+        scheduleAutosave(changedItem, updated, 150)
+      }
+
+      return sortByLineNo(updated)
+    })
+  }
+
+  function handleBackOrderChange(id: string, checked: boolean) {
+    setItems((prev) => {
+      const updated = prev.map((item) =>
+        item.id === id ? { ...item, back_order: checked } : item
       )
 
       const changedItem = updated.find((item) => item.id === id)
@@ -580,6 +599,7 @@ export default function OrderItemsTable({
               <th className="p-3 font-semibold">Qty Received</th>
               <th className="p-3 font-semibold">Complete</th>
               <th className="p-3 font-semibold">Follow Up</th>
+              <th className="p-3 font-semibold">Back Order</th>
               <th className="p-3 font-semibold">Comments</th>
             </tr>
           </thead>
@@ -688,6 +708,38 @@ export default function OrderItemsTable({
                 </td>
 
                 <td className="p-3">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleBackOrderChange(item.id, item.back_order !== true)
+                    }
+                    title="Back Order"
+                    aria-label={`Back Order for line ${item.line_no}`}
+                    aria-pressed={item.back_order === true}
+                    style={{
+                      width: '20px',
+                      height: '20px',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      borderRadius: '4px',
+                      border: item.back_order
+                        ? '2px solid #9a3412'
+                        : '2px solid #9ca3af',
+                      backgroundColor: item.back_order ? '#ea580c' : '#ffffff',
+                      color: item.back_order ? '#ffffff' : 'transparent',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      lineHeight: 1,
+                      cursor: 'pointer',
+                      padding: 0,
+                    }}
+                  >
+                    ✓
+                  </button>
+                </td>
+
+                <td className="p-3">
                   <textarea
                     data-autosize-comments="true"
                     className="w-64 min-h-[42px] resize-none rounded border bg-white p-2 text-black"
@@ -713,7 +765,7 @@ export default function OrderItemsTable({
 
             {items.length === 0 && (
               <tr>
-                <td colSpan={9} className="p-6 text-center text-gray-500">
+                <td colSpan={10} className="p-6 text-center text-gray-500">
                   No items found for this order.
                 </td>
               </tr>

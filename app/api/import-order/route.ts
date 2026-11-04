@@ -126,6 +126,14 @@ export async function PUT(request: Request) {
     const items: ImportItem[] = body.items ?? []
     const title: string | null = body.title ?? null
     const overrideDuplicate = body.overrideDuplicate === true
+    const level = body.level
+
+    if (level !== 3 && level !== 5) {
+      return NextResponse.json(
+        { error: 'Please select Level 3 or Level 5.' },
+        { status: 400 }
+      )
+    }
 
     if (!header?.requisition_no) {
       return NextResponse.json(
@@ -179,12 +187,13 @@ export async function PUT(request: Request) {
       requisition_amount_aud: header.requisition_amount_aud ?? null,
       title: title || null,
       order_complete: false,
+      level,
     }
 
     const { data: insertedOrder, error: orderError } = await supabase
       .from('orders')
       .insert(orderPayload)
-      .select('id')
+      .select('id, level')
       .single()
 
     if (orderError || !insertedOrder) {
@@ -223,6 +232,7 @@ export async function PUT(request: Request) {
     return NextResponse.json({
       ok: true,
       orderId: insertedOrder.id,
+      level: insertedOrder.level,
       createdDuplicateCopy: duplicateExists && overrideDuplicate,
     })
   } catch (error) {

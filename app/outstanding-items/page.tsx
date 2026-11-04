@@ -8,10 +8,12 @@ const THRESHOLD_OPTIONS = [7, 14, 28] as const
 
 type ThresholdDays = (typeof THRESHOLD_OPTIONS)[number]
 type SortMode = 'recent_to_oldest' | 'oldest_to_recent'
+type LevelFilter = 3 | 5 | 'both'
 
 type OrderSummary = {
   id: string
   requisition_number: string | null
+  level: number
   po_number: string | null
   order_date: string | null
   order_date_sort: string | null
@@ -27,6 +29,7 @@ type RawOutstandingRow = {
   qty_received: number | string | null
   complete: boolean | null
   follow_up: boolean | null
+  back_order: boolean | null
   comments: string | null
   order: OrderSummary | OrderSummary[] | null
 }
@@ -41,6 +44,7 @@ type OutstandingRow = {
   qty_received: number
   complete: boolean
   follow_up: boolean
+  back_order: boolean
   comments: string
   order: OrderSummary | null
 }
@@ -169,6 +173,7 @@ function normaliseOutstandingRows(rows: RawOutstandingRow[]): OutstandingRow[] {
       qty_received: Number(row.qty_received ?? 0),
       complete: row.complete === true,
       follow_up: row.follow_up === true,
+      back_order: row.back_order === true,
       comments: row.comments ?? '',
       order: orderValue,
     }
@@ -210,6 +215,7 @@ export default function OutstandingItemsPage() {
 
   const [activeThreshold, setActiveThreshold] = useState<ThresholdDays>(7)
   const [sortMode, setSortMode] = useState<SortMode>('recent_to_oldest')
+  const [levelFilter, setLevelFilter] = useState<LevelFilter>('both')
   const [historyRows, setHistoryRows] = useState<OutstandingRow[]>([])
   const [loadingOutstanding, setLoadingOutstanding] = useState(true)
   const [statusMessage, setStatusMessage] = useState(
@@ -246,8 +252,12 @@ export default function OutstandingItemsPage() {
   }, [historyRows, sortMode])
 
   const sortedHistoryRows = useMemo(() => {
-    return sortOutstandingRows(historyRows, sortMode)
-  }, [historyRows, sortMode])
+    const levelRows = levelFilter === 'both'
+      ? historyRows
+      : historyRows.filter((row) => row.order?.level === levelFilter)
+
+    return sortOutstandingRows(levelRows, sortMode)
+  }, [historyRows, sortMode, levelFilter])
 
   function setTemporaryStatus(message: string) {
     setStatusMessage(message)
@@ -280,10 +290,12 @@ export default function OutstandingItemsPage() {
         qty_received,
         complete,
         follow_up,
+        back_order,
         comments,
         order:orders!inner (
           id,
           requisition_number,
+          level,
           po_number,
           order_date,
           order_date_sort
@@ -359,6 +371,7 @@ export default function OutstandingItemsPage() {
         qty_received: row.qty_received,
         complete: row.complete,
         follow_up: row.follow_up,
+        back_order: row.back_order,
         comments: row.comments,
       })
       .eq('id', row.id)
@@ -465,6 +478,21 @@ export default function OutstandingItemsPage() {
     })
   }
 
+  function handleBackOrderToggle(rowId: string) {
+    setHistoryRows((prev) => {
+      const updated = prev.map((row) =>
+        row.id === rowId ? { ...row, back_order: !row.back_order } : row
+      )
+
+      const changedRow = updated.find((row) => row.id === rowId)
+      if (changedRow) {
+        scheduleSave(changedRow, `Saved ${changedRow.item_name}`, 150)
+      }
+
+      return updated
+    })
+  }
+
   function handleCommentsChange(rowId: string, value: string) {
     setHistoryRows((prev) => {
       const updated = prev.map((row) =>
@@ -539,6 +567,37 @@ export default function OutstandingItemsPage() {
         }}
       >
         {getThresholdHeading(activeThreshold)}
+      </div>
+
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <span className="font-bold">Show levels:</span>
+        {([3, 5, 'both'] as const).map((option) => {
+          const selected = levelFilter === option
+          const label = option === 'both' ? 'Both Levels' : `Level ${option}`
+
+          return (
+            <button
+              key={option}
+              type="button"
+              onClick={() => setLevelFilter(option)}
+              aria-pressed={selected}
+              style={{
+                backgroundColor: selected ? '#facc15' : '#ffffff',
+                color: '#111111',
+                border: '3px solid #111111',
+                borderRadius: '8px',
+                padding: '10px 16px',
+                fontWeight: 800,
+                fontSize: '15px',
+                cursor: 'pointer',
+                minWidth: '125px',
+                boxShadow: selected ? '0 2px 4px rgba(0,0,0,0.2)' : 'none',
+              }}
+            >
+              {selected ? `✓ ${label}` : label}
+            </button>
+          )
+        })}
       </div>
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
@@ -652,6 +711,7 @@ export default function OutstandingItemsPage() {
             <thead>
               <tr className="border-b bg-gray-100 text-left text-black">
                 <th className="p-3 font-semibold">Req No.</th>
+                <th className="p-3 font-semibold">Level</th>
                 <th className="p-3 font-semibold">PO No.</th>
                 <th className="p-3 font-semibold">Item</th>
                 <th className="p-3 font-semibold">Code</th>
@@ -660,6 +720,7 @@ export default function OutstandingItemsPage() {
                 <th className="p-3 font-semibold">Date Ordered</th>
                 <th className="p-3 font-semibold">Complete</th>
                 <th className="p-3 font-semibold">Follow Up</th>
+                <th className="p-3 font-semibold">Back Order</th>
                 <th className="p-3 font-semibold">Comments</th>
                 <th className="p-3 font-semibold">Open Order</th>
               </tr>
@@ -672,6 +733,7 @@ export default function OutstandingItemsPage() {
                   className="border-b align-top bg-white text-black even:bg-gray-50"
                 >
                   <td className="p-3">{row.order?.requisition_number || '—'}</td>
+                  <td className="p-3">Level {row.order?.level ?? 3}</td>
                   <td className="p-3">{row.order?.po_number || '—'}</td>
                   <td className="p-3">{row.item_name || '—'}</td>
                   <td className="p-3">{row.item_no || '—'}</td>
@@ -746,6 +808,35 @@ export default function OutstandingItemsPage() {
                     </button>
                   </td>
                   <td className="p-3">
+                    <button
+                      type="button"
+                      onClick={() => handleBackOrderToggle(row.id)}
+                      title="Back Order"
+                      aria-label="Back Order"
+                      aria-pressed={row.back_order}
+                      style={{
+                        width: '20px',
+                        height: '20px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        borderRadius: '4px',
+                        border: row.back_order
+                          ? '2px solid #c2410c'
+                          : '2px solid #9ca3af',
+                        backgroundColor: row.back_order ? '#f97316' : '#ffffff',
+                        color: row.back_order ? '#ffffff' : 'transparent',
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        lineHeight: 1,
+                        cursor: 'pointer',
+                        padding: 0,
+                      }}
+                    >
+                      ✓
+                    </button>
+                  </td>
+                  <td className="p-3">
                     <textarea
                       data-autosize-comments="true"
                       className="w-72 min-h-[42px] resize-none rounded border bg-white p-2 text-black"
@@ -776,8 +867,8 @@ export default function OutstandingItemsPage() {
 
               {sortedHistoryRows.length === 0 && (
                 <tr>
-                  <td colSpan={11} className="p-6 text-center text-gray-500">
-                    No outstanding items found for this threshold.
+                  <td colSpan={13} className="p-6 text-center text-gray-500">
+                    No outstanding items found for the selected level and threshold.
                   </td>
                 </tr>
               )}

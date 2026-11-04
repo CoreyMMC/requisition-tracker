@@ -4,6 +4,8 @@ import Link from 'next/link'
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 
+type LevelFilter = 3 | 5 | 'both'
+
 type ItemSuggestion = {
   item_no: string
   item_name: string
@@ -14,6 +16,7 @@ type OrderSummary = {
   requisition_number: string | null
   po_number: string | null
   order_date: string | null
+  level: number | null
 }
 
 type RawHistoryRow = {
@@ -26,6 +29,7 @@ type RawHistoryRow = {
   qty_received: number | string | null
   complete: boolean | null
   follow_up: boolean | null
+  back_order: boolean | null
   comments: string | null
   order: OrderSummary | OrderSummary[] | null
 }
@@ -40,6 +44,7 @@ type HistoryRow = {
   qty_received: number
   complete: boolean
   follow_up: boolean
+  back_order: boolean
   comments: string
   order: OrderSummary | null
 }
@@ -129,6 +134,7 @@ function normaliseHistoryRows(rows: RawHistoryRow[]): HistoryRow[] {
         qty_received: Number(row.qty_received ?? 0),
         complete: row.complete === true,
         follow_up: row.follow_up === true,
+        back_order: row.back_order === true,
         comments: row.comments ?? '',
         order: orderValue,
       }
@@ -261,6 +267,7 @@ export default function SearchMissingItemPage() {
   const supabase = createClient()
 
   const [query, setQuery] = useState('')
+  const [activeLevel, setActiveLevel] = useState<LevelFilter>('both')
   const [suggestions, setSuggestions] = useState<ItemSuggestion[]>([])
   const [selectedItem, setSelectedItem] = useState<ItemSuggestion | null>(null)
   const [historyRows, setHistoryRows] = useState<HistoryRow[]>([])
@@ -295,7 +302,7 @@ export default function SearchMissingItemPage() {
     }, 1800)
   }
 
-  async function handleSearch() {
+  async function handleSearch(level: LevelFilter = activeLevel) {
     const trimmed = query.trim()
 
     if (!trimmed) {
@@ -312,18 +319,25 @@ export default function SearchMissingItemPage() {
     setSuggestions([])
     setStatusMessage('Searching matching items...')
 
-    const [codeResult, nameResult] = await Promise.all([
-      supabase
-        .from('order_items')
-        .select('item_no, item_name')
-        .ilike('item_no', `%${trimmed}%`)
-        .limit(25),
-      supabase
-        .from('order_items')
-        .select('item_no, item_name')
-        .ilike('item_name', `%${trimmed}%`)
-        .limit(25),
-    ])
+    // Search only orders from the selected level (or both levels).
+    const codeQuery = supabase
+      .from('order_items')
+      .select('item_no, item_name, order:orders!inner(level)')
+      .ilike('item_no', `%${trimmed}%`)
+      .limit(25)
+
+    const nameQuery = supabase
+      .from('order_items')
+      .select('item_no, item_name, order:orders!inner(level)')
+      .ilike('item_name', `%${trimmed}%`)
+      .limit(25)
+
+    if (level !== 'both') {
+      codeQuery.eq('order.level', level)
+      nameQuery.eq('order.level', level)
+    }
+
+    const [codeResult, nameResult] = await Promise.all([codeQuery, nameQuery])
 
     setSearching(false)
 
@@ -351,7 +365,10 @@ export default function SearchMissingItemPage() {
     )
   }
 
-  async function loadHistoryForSuggestion(suggestion: ItemSuggestion) {
+  async function loadHistoryForSuggestion(
+    suggestion: ItemSuggestion,
+    level: LevelFilter = activeLevel
+  ) {
     setSelectedItem(suggestion)
     setLoadingHistory(true)
     setHistoryRows([])
@@ -369,12 +386,14 @@ export default function SearchMissingItemPage() {
         qty_received,
         complete,
         follow_up,
+        back_order,
         comments,
         order:orders!inner (
           id,
           requisition_number,
           po_number,
-          order_date
+          order_date,
+          level
         )
       `)
 
@@ -382,6 +401,10 @@ export default function SearchMissingItemPage() {
       queryBuilder = queryBuilder.eq('item_no', suggestion.item_no.trim())
     } else {
       queryBuilder = queryBuilder.eq('item_name', suggestion.item_name.trim())
+    }
+
+    if (level !== 'both') {
+      queryBuilder = queryBuilder.eq('order.level', level)
     }
 
     const { data, error } = await queryBuilder
@@ -441,6 +464,7 @@ export default function SearchMissingItemPage() {
         qty_received: row.qty_received,
         complete: row.complete,
         follow_up: row.follow_up,
+        back_order: row.back_order,
         comments: row.comments,
       })
       .eq('id', row.id)
@@ -543,6 +567,21 @@ export default function SearchMissingItemPage() {
     })
   }
 
+  function handleBackOrderToggle(rowId: string) {
+    setHistoryRows((prev) => {
+      const updated = prev.map((row) =>
+        row.id === rowId ? { ...row, back_order: !row.back_order } : row
+      )
+
+      const changedRow = updated.find((row) => row.id === rowId)
+      if (changedRow) {
+        scheduleSave(changedRow, `Saved ${changedRow.item_name}`, 150)
+      }
+
+      return updated
+    })
+  }
+
   function handleCommentsChange(rowId: string, value: string) {
     setHistoryRows((prev) => {
       const updated = prev.map((row) =>
@@ -556,6 +595,21 @@ export default function SearchMissingItemPage() {
 
       return updated
     })
+  }
+
+  function handleLevelChange(level: LevelFilter) {
+    setActiveLevel(level)
+
+    if (selectedItem) {
+      // Keep the chosen item and reload its history for the selected level.
+      setSuggestions([])
+      void loadHistoryForSuggestion(selectedItem, level)
+    } else if (query.trim()) {
+      // Refresh search suggestions when switching levels.
+      void handleSearch(level)
+    } else {
+      setStatusMessage('Type an item name or item code, then click Search')
+    }
   }
 
   function clearSearch() {
@@ -607,6 +661,35 @@ export default function SearchMissingItemPage() {
       </div>
 
       <h1 className="mb-6 text-2xl font-bold">Search Missing Item</h1>
+
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <span className="mr-1 font-bold">Show level:</span>
+        {([3, 5, 'both'] as const).map((level) => {
+          const isActive = activeLevel === level
+          return (
+            <button
+              key={level}
+              type="button"
+              onClick={() => handleLevelChange(level)}
+              aria-pressed={isActive}
+              style={{
+                backgroundColor: isActive ? '#facc15' : '#ffffff',
+                color: '#111111',
+                border: '3px solid #111111',
+                borderRadius: '8px',
+                padding: '10px 16px',
+                fontWeight: 800,
+                fontSize: '15px',
+                cursor: 'pointer',
+                boxShadow: isActive ? '0 2px 5px rgba(0,0,0,0.2)' : 'none',
+              }}
+            >
+              {isActive ? '✓ ' : ''}
+              {level === 'both' ? 'Both Levels' : `Level ${level}`}
+            </button>
+          )
+        })}
+      </div>
 
       <div className="mb-4 text-sm text-gray-700">{statusMessage}</div>
 
@@ -725,6 +808,7 @@ export default function SearchMissingItemPage() {
             <thead>
               <tr className="border-b bg-gray-100 text-left text-black">
                 <th className="p-3 font-semibold">Req No.</th>
+                <th className="p-3 font-semibold">Level</th>
                 <th className="p-3 font-semibold">PO No.</th>
                 <th className="p-3 font-semibold">Item</th>
                 <th className="p-3 font-semibold">Code</th>
@@ -733,6 +817,7 @@ export default function SearchMissingItemPage() {
                 <th className="p-3 font-semibold">Date Ordered</th>
                 <th className="p-3 font-semibold">Complete</th>
                 <th className="p-3 font-semibold">Follow Up</th>
+                <th className="p-3 font-semibold">Back Order</th>
                 <th className="p-3 font-semibold">Comments</th>
                 <th className="p-3 font-semibold">Open Order</th>
               </tr>
@@ -745,6 +830,11 @@ export default function SearchMissingItemPage() {
                   className="border-b align-top bg-white text-black even:bg-gray-50"
                 >
                   <td className="p-3">{row.order?.requisition_number || '—'}</td>
+                  <td className="p-3">
+                    {row.order?.level === 3 || row.order?.level === 5
+                      ? `Level ${row.order.level}`
+                      : '—'}
+                  </td>
                   <td className="p-3">{row.order?.po_number || '—'}</td>
                   <td className="p-3">{row.item_name || '—'}</td>
                   <td className="p-3">{row.item_no || '—'}</td>
@@ -819,6 +909,35 @@ export default function SearchMissingItemPage() {
                     </button>
                   </td>
                   <td className="p-3">
+                    <button
+                      type="button"
+                      onClick={() => handleBackOrderToggle(row.id)}
+                      title="Back Order"
+                      aria-label="Back Order"
+                      aria-pressed={row.back_order}
+                      style={{
+                        width: '20px',
+                        height: '20px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        borderRadius: '4px',
+                        border: row.back_order
+                          ? '2px solid #c2410c'
+                          : '2px solid #9ca3af',
+                        backgroundColor: row.back_order ? '#f97316' : '#ffffff',
+                        color: row.back_order ? '#ffffff' : 'transparent',
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        lineHeight: 1,
+                        cursor: 'pointer',
+                        padding: 0,
+                      }}
+                    >
+                      ✓
+                    </button>
+                  </td>
+                  <td className="p-3">
                     <input
                       type="text"
                       className="w-72 rounded border bg-white p-2 text-black"
@@ -838,7 +957,7 @@ export default function SearchMissingItemPage() {
 
               {historyRows.length === 0 && (
                 <tr>
-                  <td colSpan={11} className="p-6 text-center text-gray-500">
+                  <td colSpan={13} className="p-6 text-center text-gray-500">
                     No order history found for this item.
                   </td>
                 </tr>
