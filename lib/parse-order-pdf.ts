@@ -32,40 +32,11 @@ type ItemBlock = {
   lines: string[]
 }
 
-const HEADER_SKIP_PATTERNS = [
-  /^Requisition \d+ \([\d,]+\.\d{2} AUD\) Report Date\b/i,
-  /^Page \d+ of \d+$/i,
-  /^Requisitioning BU\b/i,
-  /^Entered By\b/i,
-  /^Status Pending approval Procurement Card$/i,
-  /^Description\b/i,
-  /^Emergency Requisition\b/i,
-  /^Lines$/i,
-  /^Line Item Description Category$/i,
-  /^Name$/i,
-  /^Quantity UOM Price Amount$/i,
-  /^\(AUD\)$/i,
-  /^Status Funds$/i,
-  /^Status$/i,
-]
-
-/**
- * Supports BOTH:
- *   1 ABC-123 Some description here
- * and:
- *   1 ABC-123
- *   Description on next line
- */
-const ITEM_START_REGEX = /^(\d{1,2})\s+([A-Z0-9][A-Z0-9-]{4,})(?:\s+(.*))?$/i
-
-const QTY_PRICE_AMOUNT_REGEX =
-  /(\d+(?:\.\d+)?)\s+([A-Z]+(?:\s+[A-Z]+)?)\s+([\d,]+\.\d{2})\s+(?:AUD\s+)?([\d,]+\.\d{2})\b/i
-
 function cleanPdfText(value: string): string {
   return value
     .replace(/\u00a0/g, ' ')
     .replace(/￾/g, '-')
-    .replace(/[‐-–—]/g, '-')
+    .replace(/[‐‑–—]/g, '-')
 }
 
 function collapseWhitespace(value: string): string {
@@ -75,7 +46,7 @@ function collapseWhitespace(value: string): string {
 function parseMoney(value?: string): number | null {
   if (!value) return null
   const parsed = Number(value.replace(/,/g, '').trim())
-  return Number.isNaN(parsed) ? null : parsed
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 function formatUsDateToAu(value?: string): string {
@@ -83,26 +54,6 @@ function formatUsDateToAu(value?: string): string {
   const [month, day, year] = value.split('/')
   if (!month || !day || !year) return value
   return `${Number(day)}/${Number(month)}/${year}`
-}
-
-function cleanItemName(value: string): string {
-  return collapseWhitespace(value)
-    .replace(/\bOther General Medical Consumables\b/gi, '')
-    .replace(/\bOther General Medical Consumabl es\b/gi, '')
-    .replace(/\bGeneral Medical Consumables\b/gi, '')
-    .replace(/\bGeneral Medical Consumabl es\b/gi, '')
-    .replace(/\bWaste Disposal\b/gi, '')
-    .replace(/\bPACK ET\b/gi, 'PACKET')
-    .replace(/\bCART ON\b/gi, 'CARTON')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-function normaliseForMatching(value: string): string {
-  return collapseWhitespace(value).replace(
-    /(\d[\d,]*\.\d)\s+(\d)(?=\s+(?:AUD|[\d,]+\.\d{2}\b))/g,
-    '$1$2'
-  )
 }
 
 function extractHeader(text: string): ParsedOrderHeader {
@@ -117,12 +68,12 @@ function extractHeader(text: string): ParsedOrderHeader {
   const enteredBy =
     normalized.match(/\bEntered By\s+(.+?)\s+Approval Amount\b/i)?.[1] ?? ''
 
-  const requisitionAmount =
-    parseMoney(
-      normalized.match(/\bRequisition Amount\s+([\d,]+\.\d{2})\s+AUD\b/i)?.[1] ??
-        normalized.match(/\bRequisition\s+\d{6,}\s+\(([\d,]+\.\d{2})\s+AUD\)/i)?.[1]
-    )
+  const requisitionAmount = parseMoney(
+    normalized.match(/\bRequisition Amount\s+([\d,]+\.\d{2})\s+AUD\b/i)?.[1] ??
+      normalized.match(/\bRequisition\s+\d{6,}\s+\(([\d,]+\.\d{2})\s+AUD\)/i)?.[1]
+  )
 
+  // These Oracle requisition PDFs normally have no PO number; leave it blank.
   const poNumbers =
     normalized.match(
       /\b(?:PO|Purchase Order)\b\s*(?:No|Number)?[:#]?\s*([A-Z0-9,\-\/ ]{4,})\b/i
@@ -137,213 +88,198 @@ function extractHeader(text: string): ParsedOrderHeader {
   }
 }
 
-function shouldSkipHeaderLine(line: string): boolean {
-  return HEADER_SKIP_PATTERNS.some((pattern) => pattern.test(line))
+// A code is optional. Do not mistake a name such as "NPi300" or
+// "16-18 Bridle" for a catalogue number.
+function isLikelyCatalogueCode(token: string): boolean {
+  return /^\d{4,}$/.test(token) || /^(?=[A-Z0-9-]{5,}$)(?=.*[A-Z])(?=.*\d)[A-Z]+-\d{3,}$/i.test(token)
 }
 
-function isDescriptionLine(line: string): boolean {
-  const normalized = collapseWhitespace(line)
-  if (!normalized) return false
+function startItemBlock(rawLine: string): ItemBlock | null {
+  const match = cleanPdfText(rawLine).match(/^\s*(\d{1,3})(\s+)(\S+)(.*)$/)
+  if (!match) return null
 
-  const lower = normalized.toLowerCase()
+  const lineNo = Number(match[1])
+  const spacesAfterLineNo = match[2].length
+  const firstToken = match[3]
+  const remainder = match[4] ?? ''
 
-  if (
-    [
-      'other',
-      'general',
-      'medical',
-      'consumabl',
-      'es',
-      'consumables',
-      'aud',
-      'approval',
-      'not',
-      'reserved',
-      'aud approval reserved',
-    ].includes(lower)
-  ) {
-    return false
+  // Quantity/UOM rows can start with a number too (e.g. '2 BOX 610.00').
+  // They are NOT new requisition lines.
+  if (/^(?:EACH|BOX|PACK|CART|SET|PAIR|BAG|ROLL|UNIT|KIT|CASE|EA|PKT|PK|BOTTLE|VIAL|TUBE)$/i.test(firstToken) &&
+      /^\s+(?:ET\s+|ON\s+)?[\d,]+(?:\.\d{1,2})?\b/.test(remainder)) {
+    return null
   }
 
-  if (/^[\d,]+\.\d{2}\s+pending\b/i.test(normalized)) return false
-  if (/^\d+\s+aud$/i.test(normalized)) return false
-  if (/^pending\b/i.test(normalized)) return false
+  // In the Oracle table, the blank Item cell gives a much wider gap
+  // (usually around 20 spaces versus ~8 when an item code is present).
+  // The code-pattern fallback also works with PDF extractors that remove gaps.
+  const hasCode = spacesAfterLineNo < 14 && isLikelyCatalogueCode(firstToken)
+  const firstDescription = hasCode
+    ? remainder.trim()
+    : `${firstToken}${remainder}`.trim()
 
-  if (
-    /^(urgent|requested delivery date|deliver-to|contact phone|supplier item|destination type|subinventory|note to buyer|distribution charge account budget|date|percentage quantity amount|funds)\b/i.test(
-      normalized
-    )
-  ) {
-    return false
+  return {
+    line_no: lineNo,
+    item_no: hasCode ? firstToken : '',
+    lines: firstDescription ? [firstDescription] : [],
   }
-
-  if (/^\d{1,2}\/\d{1,2}\/\d{2}\s+\d+/i.test(normalized)) return false
-
-  if (/^[A-Z0-9-]+$/i.test(normalized) && normalized.length > 12) return false
-
-  if (
-    /^\d+(?:\.\d+)?\s+[A-Z]+(?:\s+[A-Z]+)?\s+[\d,]+\.\d{1,2}$/i.test(normalized)
-  ) {
-    return false
-  }
-
-  return true
 }
 
 function buildItemBlocks(text: string): ItemBlock[] {
-  const rawLines = cleanPdfText(text).split(/\r?\n/)
   const blocks: ItemBlock[] = []
-
   let current: ItemBlock | null = null
-  let inLinesSection = false
+  let seenLines = false
+  let inItemTable = false
 
-  for (const rawLine of rawLines) {
+  const finishBlock = () => {
+    if (current) blocks.push(current)
+    current = null
+  }
+
+  for (const rawLine of cleanPdfText(text).split(/\r?\n/)) {
     const line = collapseWhitespace(rawLine)
     if (!line) continue
 
-    // Start parsing only once we hit a Lines table
     if (/^Lines$/i.test(line)) {
-      inLinesSection = true
+      seenLines = true
       continue
     }
+    if (!seenLines) continue
 
-    if (!inLinesSection) continue
-
-    // End of the whole report
-    if (line === 'End of Report') {
-      if (current) {
-        blocks.push(current)
-        current = null
-      }
+    if (/^End of Report$/i.test(line)) {
+      finishBlock()
       break
     }
 
-    if (shouldSkipHeaderLine(line)) continue
-
-    const startMatch = line.match(ITEM_START_REGEX)
-
-    if (startMatch) {
-      if (current) {
-        blocks.push(current)
-      }
-
-      current = {
-        line_no: Number(startMatch[1]),
-        item_no: startMatch[2],
-        lines: startMatch[3]?.trim() ? [startMatch[3].trim()] : [],
-      }
-
+    // Only start items inside the Oracle 'Line / Item / Description' table.
+    // This avoids creating phantom items from Distribution / Charge Account rows.
+    if (/^Line\s+Item\s+Description\s+Category\b/i.test(line)) {
+      inItemTable = true
       continue
     }
 
-    // Save current item, then keep scanning for the next one
-    if (line.startsWith('Requester ')) {
-      if (current) {
-        blocks.push(current)
-        current = null
-      }
+    if (/^Requester\b/i.test(line)) {
+      finishBlock()
+      inItemTable = false
+      continue
+    }
+    if (/^Distribution\s+Charge Account\b/i.test(line)) {
+      finishBlock()
+      inItemTable = false
+      continue
+    }
+    if (!inItemTable) continue
+
+    if (/^(?:Name|Quantity\s+UOM|\(AUD\)|Status\s+Funds|Status)$/i.test(line)) {
       continue
     }
 
-    if (!current) {
+    const potential = startItemBlock(rawLine)
+    // Order line numbers are 1, 2, 3 ...; descriptions and other table
+    // content must not be mistaken for another line.
+    const expectedNext = blocks.length + (current ? 2 : 1)
+    if (potential && potential.line_no === expectedNext) {
+      finishBlock()
+      current = potential
       continue
     }
 
-    current.lines.push(line)
+    if (current) current.lines.push(rawLine)
   }
 
-  if (current) {
-    blocks.push(current)
-  }
-
+  finishBlock()
   return blocks
 }
 
-function extractItemFromBlock(block: ItemBlock): ParsedOrderItem | null {
-  const joined = normaliseForMatching(block.lines.join(' '))
-  const qtyMatch = joined.match(QTY_PRICE_AMOUNT_REGEX)
+function normaliseForMatching(value: string): string {
+  return collapseWhitespace(value).replace(
+    /(\d[\d,]*\.\d)\s+(\d)(?=\s+(?:AUD|[\d,]+\.\d{2}\b))/g,
+    '$1$2'
+  )
+}
 
-  if (!qtyMatch) {
+// Accept price wrapping (e.g. "1,550.0" on one line, "0 AUD" on the
+// next), PACK/ET and CART/ON UOM wrapping, and line amounts with commas.
+const QTY_PRICE_AMOUNT_REGEX =
+  /\b(\d+(?:\.\d+)?)\s+(EACH|BOX|PACK(?:\s*ET)?|CART(?:\s*ON)?|SET|PAIR|BAG|ROLL|UNIT|KIT|CASE|EA|PKT|PK|BOTTLE|VIAL|TUBE)\s+([\d,]+(?:\.\d{1,2})?)\s+(?:AUD\s+)?([\d,]+\.\d{2})\b/i
+
+const NON_DESCRIPTION_LINE =
+  /^(?:other|general|medical|consumabl|es|consumables|aud|approved|liquidated|not applicable|not|applicable|laboratory|supplies\s*-?|pathology|equipment|pack|et|cart|on|status|funds|name)$/i
+
+function cleanDescriptionFragment(rawLine: string): string {
+  // Preserved double spaces identify the description column in Oracle PDFs.
+  const firstColumn = cleanPdfText(rawLine).trim().split(/\s{2,}/)[0].trim()
+  let line = firstColumn
+
+  // Text extraction can sometimes remove layout gaps: trim category/price
+  // fields if they were merged onto the same text line.
+  line = line.replace(/\s+(?:Other|Laboratory|Pathology)(?:\s+General)?\s+\d+\s+(?:EACH|BOX|PACK|CART|SET|PAIR|BAG|UNIT)\b.*$/i, '')
+  line = line.replace(/\s+(?:Other|Laboratory|Pathology)(?:\s+General)?$/i, '')
+  line = line.replace(/\s+(?:Approved|Liquidated)\b.*$/i, '')
+
+  const normalized = collapseWhitespace(line)
+  if (!normalized || NON_DESCRIPTION_LINE.test(normalized)) return ''
+  if (/^\d+(?:\.\d+)?\s+(?:EACH|BOX|PACK|CART|SET|PAIR|BAG|ROLL|UNIT|KIT|CASE|EA|PKT|PK|BOTTLE|VIAL|TUBE)(?:\s+(?:ET|ON))?(?:\s+[\d,]+(?:\.\d{1,2})?)?$/i.test(normalized)) return ''
+  if (/^(?:EACH|BOX|PACK|CART|SET|PAIR|BAG|UNIT|PKT)\s+[\d,]+\.\d{1,2}/i.test(normalized)) return ''
+  if (/^[\d,]+\.\d{2}(?:\s+AUD)?\b/i.test(normalized)) return ''
+  if (/^\d+\s+AUD$/i.test(normalized)) return ''
+  if (/^\d{1,2}\/\d{1,2}\/\d{2}\b/.test(normalized)) return ''
+  if (/^(?:Requisition|Page|Requester|Supplier|Urgent|Deliver-to|Destination Type|Subinventory|Contact Phone|Requested Delivery|Distribution|Charge Account)\b/i.test(normalized)) return ''
+
+  return normalized
+}
+
+function extractItemFromBlock(block: ItemBlock): ParsedOrderItem | null {
+  const combined = normaliseForMatching(block.lines.join(' '))
+  const match = combined.match(QTY_PRICE_AMOUNT_REGEX)
+  if (!match) return null
+
+  const qtyOrdered = Number(match[1])
+  const amountAud = parseMoney(match[4])
+  if (!Number.isFinite(qtyOrdered) || qtyOrdered <= 0 || amountAud === null) {
     return null
   }
-
-  const qtyOrdered = Number(qtyMatch[1]) || 0
-  const amountAud = parseMoney(qtyMatch[4])
 
   const nameParts: string[] = []
-
   for (const rawLine of block.lines) {
-    const line = collapseWhitespace(rawLine)
-    if (!line) continue
-
-    const normalizedLine = normaliseForMatching(line)
-    const inlineQtyMatch = normalizedLine.match(QTY_PRICE_AMOUNT_REGEX)
-
-    if (inlineQtyMatch) {
-      const qtyStartIndex = inlineQtyMatch.index ?? -1
-      const prefix =
-        qtyStartIndex >= 0
-          ? normalizedLine.slice(0, qtyStartIndex).trim()
-          : ''
-
-      const cleanedPrefix = prefix.replace(/\bOther\s*$/i, '').trim()
-
-      if (cleanedPrefix && isDescriptionLine(cleanedPrefix)) {
-        nameParts.push(cleanedPrefix)
-      }
-
+    const line = normaliseForMatching(rawLine)
+    // Quantities and amounts are data columns, not part of the description.
+    if (QTY_PRICE_AMOUNT_REGEX.test(line) && !/\s{2,}/.test(rawLine)) {
+      // In collapsed text, strip the numerical suffix while retaining the name.
+      const index = line.search(QTY_PRICE_AMOUNT_REGEX)
+      const prefix = index >= 0 ? line.slice(0, index) : line
+      const cleaned = cleanDescriptionFragment(prefix)
+      if (cleaned) nameParts.push(cleaned)
       continue
     }
-
-    if (isDescriptionLine(line)) {
-      nameParts.push(line)
-    }
+    const cleaned = cleanDescriptionFragment(rawLine)
+    if (cleaned) nameParts.push(cleaned)
   }
 
-  const itemName = cleanItemName(nameParts.join(' '))
+  const itemName = collapseWhitespace(nameParts.join(' '))
+    .replace(/\bOther General Medical Consumabl(?:es|\s+es)\b/gi, '')
+    .replace(/\bGeneral Medical Consumabl(?:es|\s+es)\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
 
-  if (!itemName) {
-    return null
-  }
-
-  return {
-    line_no: block.line_no,
-    item_no: block.item_no,
-    item_name: itemName,
-    qty_ordered: qtyOrdered,
-    amount_aud: amountAud,
-  }
+  return itemName
+    ? { line_no: block.line_no, item_no: block.item_no, item_name: itemName, qty_ordered: qtyOrdered, amount_aud: amountAud }
+    : null
 }
 
 function extractItems(text: string): ParsedOrderItem[] {
-  const blocks = buildItemBlocks(text)
-  const items: ParsedOrderItem[] = []
-
-  for (const block of blocks) {
-    const item = extractItemFromBlock(block)
-    if (item) {
-      items.push(item)
-    }
-  }
-
-  return items
+  return buildItemBlocks(text)
+    .map(extractItemFromBlock)
+    .filter((item): item is ParsedOrderItem => item !== null)
 }
 
 export async function parseOrderPdf(buffer: Buffer): Promise<ParsedOrderResult> {
-  const parser = new PDFParse({
-    data: buffer,
-    CanvasFactory,
-  })
+  const parser = new PDFParse({ data: buffer, CanvasFactory })
 
   try {
     const result = await parser.getText()
     const text = result.text || ''
-
-    const lines = text
-      .split(/\r?\n/)
-      .map((line) => collapseWhitespace(line))
-      .filter(Boolean)
-
+    const lines = text.split(/\r?\n/).map(collapseWhitespace).filter(Boolean)
     const header = extractHeader(text)
     const items = extractItems(text)
 
