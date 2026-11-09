@@ -108,7 +108,7 @@ export default function NewOrderPage() {
                 selectedLevel === level ? 'bg-yellow-400' : 'bg-white'
               }`}
             >
-              {selectedLevel === level ? '✓ ' : ''}Level {level}
+              {selectedLevel === level ? '✓ ' : ''}L{level}
             </button>
           ))}
         </div>

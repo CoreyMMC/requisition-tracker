@@ -685,7 +685,7 @@ export default function SearchMissingItemPage() {
               }}
             >
               {isActive ? '✓ ' : ''}
-              {level === 'both' ? 'Both Levels' : `Level ${level}`}
+              {level === 'both' ? 'Both Levels' : `L${level}`}
             </button>
           )
         })}
@@ -832,7 +832,7 @@ export default function SearchMissingItemPage() {
                   <td className="p-3">{row.order?.requisition_number || '—'}</td>
                   <td className="p-3">
                     {row.order?.level === 3 || row.order?.level === 5
-                      ? `Level ${row.order.level}`
+                      ? `L${row.order.level}`
                       : '—'}
                   </td>
                   <td className="p-3">{row.order?.po_number || '—'}</td>

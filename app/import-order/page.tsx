@@ -143,9 +143,9 @@ export default function ImportOrderPage() {
       }
 
       if (data?.overridden) {
-        setMessage(`Success: Requisition ${parsedHeader.requisition_no} was overridden and re-imported to Level ${selectedLevel}.`)
+        setMessage(`Success: Requisition ${parsedHeader.requisition_no} was overridden and re-imported to L${selectedLevel}.`)
       } else {
-        setMessage(`Success: Requisition ${parsedHeader.requisition_no} imported successfully to Level ${selectedLevel}.`)
+        setMessage(`Success: Requisition ${parsedHeader.requisition_no} imported successfully to L${selectedLevel}.`)
       }
 
       setDuplicateMessage('')
@@ -319,7 +319,7 @@ export default function ImportOrderPage() {
                     opacity: importing ? 0.6 : 1,
                   }}
                 >
-                  {selectedLevel === level ? '✓ ' : ''}Level {level}
+                  {selectedLevel === level ? '✓ ' : ''}L{level}
                 </button>
               ))}
             </div>

@@ -1,7 +1,9 @@
+
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { formatPoNumbers } from '@/lib/po-numbers'
 
 type Props = {
   orderId: string
@@ -16,78 +18,101 @@ export default function EditablePoInput({
   placeholder = 'Enter PO number(s)',
   className = '',
 }: Props) {
-  const supabase = createClient()
+  const supabase = useRef(createClient()).current
 
-  const [value, setValue] = useState(initialValue || '')
-  const [status, setStatus] = useState('')
+  const [value, setValue] = useState(
+    formatPoNumbers(initialValue)
+  )
   const [saving, setSaving] = useState(false)
+  const [status, setStatus] = useState('')
 
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const lastSavedValueRef = useRef(initialValue || '')
+  const timeout = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  )
+
+  const saved = useRef(formatPoNumbers(initialValue))
+  const version = useRef(0)
 
   useEffect(() => {
-    const nextValue = initialValue || ''
-    setValue(nextValue)
-    lastSavedValueRef.current = nextValue
+    const next = formatPoNumbers(initialValue)
+
+    setValue(next)
+    saved.current = next
   }, [initialValue])
 
-  async function saveValue(nextValue: string) {
-    const trimmedValue = nextValue.trim()
+  useEffect(() => {
+    return () => {
+      if (timeout.current) {
+        clearTimeout(timeout.current)
+      }
+    }
+  }, [])
 
-    if (trimmedValue === lastSavedValueRef.current.trim()) {
-      setSaving(false)
-      setStatus('')
+  async function saveValue(raw: string, currentVersion: number) {
+    const formatted = formatPoNumbers(raw)
+
+    if (formatted === saved.current) {
+      if (currentVersion === version.current) {
+        setSaving(false)
+        setStatus('')
+        setValue(formatted)
+      }
       return
     }
 
     const { error } = await supabase
       .from('orders')
       .update({
-        po_number: trimmedValue || null,
+        po_number: formatted || null,
       })
       .eq('id', orderId)
 
-    setSaving(false)
-
     if (error) {
       setStatus(`Error: ${error.message}`)
+      setSaving(false)
       return
     }
 
-    lastSavedValueRef.current = trimmedValue
-    setStatus('Saved')
+    saved.current = formatted
 
-    setTimeout(() => {
-      setStatus('')
-    }, 1200)
+    if (currentVersion === version.current) {
+      setValue(formatted)
+      setSaving(false)
+      setStatus('Saved')
+    }
   }
 
-  function scheduleSave(nextValue: string) {
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current)
+  function scheduleSave(raw: string) {
+    if (timeout.current) {
+      clearTimeout(timeout.current)
     }
+
+    version.current += 1
+    const currentVersion = version.current
 
     setSaving(true)
     setStatus('Saving...')
 
-    timeoutRef.current = setTimeout(() => {
-      saveValue(nextValue)
+    timeout.current = setTimeout(() => {
+      void saveValue(raw, currentVersion)
     }, 700)
   }
 
-  function handleChange(nextValue: string) {
-    setValue(nextValue)
-    scheduleSave(nextValue)
+  function handleChange(raw: string) {
+    setValue(raw)
+    scheduleSave(raw)
   }
 
   function handleBlur() {
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current)
+    if (timeout.current) {
+      clearTimeout(timeout.current)
     }
 
+    version.current += 1
+    const currentVersion = version.current
+
     setSaving(true)
-    setStatus('Saving...')
-    saveValue(value)
+    void saveValue(value, currentVersion)
   }
 
   return (
@@ -96,9 +121,11 @@ export default function EditablePoInput({
         type="text"
         value={value}
         placeholder={placeholder}
-        onChange={(e) => handleChange(e.target.value)}
-        onBlur={handleBlur}
         className={className}
+        onChange={(event) =>
+          handleChange(event.target.value)
+        }
+        onBlur={handleBlur}
       />
 
       <div className="mt-1 min-h-[20px] text-xs text-gray-600">

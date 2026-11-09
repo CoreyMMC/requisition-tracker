@@ -1354,7 +1354,7 @@ export default function UploadPage() {
                             }}
                           >
                             {entry.level === level ? '✓ ' : ''}
-                            Level {level}
+                            L{level}
                           </button>
                         ))}
                       </div>

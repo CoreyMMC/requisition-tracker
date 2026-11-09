@@ -326,7 +326,7 @@ export default function RecentItemsPage() {
       if (sortedOrders.length === 0) {
         setLoadingRecent(false)
         setStatusMessage(
-          levelFilter === 'both' ? 'No orders found' : `No Level ${levelFilter} orders found`
+          levelFilter === 'both' ? 'No orders found' : `No L${levelFilter} orders found`
         )
         return
       }
@@ -672,7 +672,7 @@ export default function RecentItemsPage() {
           <span className="font-bold">Show level:</span>
           {([3, 5, 'both'] as const).map((levelOption) => {
             const isSelected = selectedLevel === levelOption
-            const label = levelOption === 'both' ? 'Both Levels' : `Level ${levelOption}`
+            const label = levelOption === 'both' ? 'Both Levels' : `L${levelOption}`
 
             return (
               <button
@@ -737,7 +737,7 @@ export default function RecentItemsPage() {
                   className="border-b align-top bg-white text-black even:bg-gray-50"
                 >
                   <td className="p-3">{row.order?.requisition_number || '—'}</td>
-                  <td className="p-3">{row.order?.level ? `Level ${row.order.level}` : '—'}</td>
+                  <td className="p-3">{row.order?.level ? `L${row.order.level}` : '—'}</td>
                   <td className="p-3">{row.order?.po_number || '—'}</td>
                   <td className="p-3">{row.item_name || '—'}</td>
                   <td className="p-3">{row.item_no || '—'}</td>

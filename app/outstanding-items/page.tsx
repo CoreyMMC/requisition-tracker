@@ -573,7 +573,7 @@ export default function OutstandingItemsPage() {
         <span className="font-bold">Show levels:</span>
         {([3, 5, 'both'] as const).map((option) => {
           const selected = levelFilter === option
-          const label = option === 'both' ? 'Both Levels' : `Level ${option}`
+          const label = option === 'both' ? 'Both Levels' : `L${option}`
 
           return (
             <button
@@ -733,7 +733,7 @@ export default function OutstandingItemsPage() {
                   className="border-b align-top bg-white text-black even:bg-gray-50"
                 >
                   <td className="p-3">{row.order?.requisition_number || '—'}</td>
-                  <td className="p-3">Level {row.order?.level ?? 3}</td>
+                  <td className="p-3">L{row.order?.level ?? 3}</td>
                   <td className="p-3">{row.order?.po_number || '—'}</td>
                   <td className="p-3">{row.item_name || '—'}</td>
                   <td className="p-3">{row.item_no || '—'}</td>

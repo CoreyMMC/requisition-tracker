@@ -451,8 +451,8 @@ export default function OrdersTableClient({ initialOrders }: Props) {
       <div className="mb-4 flex flex-wrap items-center gap-3 rounded border-2 border-gray-300 bg-white p-4">
         <span className="text-base font-bold text-black">Show orders:</span>
         {[
-          { label: 'Level 3', levels: [3] },
-          { label: 'Level 5', levels: [5] },
+          { label: 'L3', levels: [3] },
+          { label: 'L5', levels: [5] },
           { label: 'Both Levels', levels: [3, 5] },
         ].map((option) => {
           const active =
@@ -616,7 +616,7 @@ export default function OrdersTableClient({ initialOrders }: Props) {
                     </div>
                   </td>
                   <td className="whitespace-nowrap p-3 font-semibold">
-                    Level {order.level === 5 ? 5 : 3}
+                    L{order.level === 5 ? 5 : 3}
                   </td>
                   <td className="p-3">
                     <EditableOrderField
