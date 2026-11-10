@@ -1,469 +1,611 @@
 
 'use client'
 
-import { useRef, useState } from 'react'
+import Link from 'next/link'
+import { useRouter } from 'next/navigation'
+import {
+  createContext,
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import type {
   ChangeEvent,
   DragEvent,
   ReactNode,
 } from 'react'
 import ExcelSyncPage from '../excel-sync/page'
+import type { ExcelSyncController } from '../excel-sync/page'
 
-type Props = {
-  children: ReactNode
+export type UploadResult = {
+  succeeded: number
+  failed: File[]
+  errors: string[]
 }
 
-const button = {
-  padding: '12px 19px',
-  border: '1px solid #b9c4cc',
-  borderRadius: 9,
-  background: '#fff',
-  color: '#111827',
-  fontWeight: 700,
+export type ImportResult = {
+  succeeded: number
+  failed: number
+  cancelled: boolean
+}
+
+export type PdfStatus = {
+  uploaded: number
+  importable: number
+  imported: number
+  failed: number
+}
+
+export type PdfController = {
+  upload: (files: File[]) => Promise<UploadResult>
+  validateImport: () => string[]
+  importAll: () => Promise<ImportResult>
+  reset: () => void
+}
+
+type PdfBridge = {
+  registerPdf: (controller: PdfController | null) => void
+  reportPdf: (status: PdfStatus) => void
+}
+
+export const PdfUploadContext =
+  createContext<PdfBridge | null>(null)
+
+const emptyPdf: PdfStatus = {
+  uploaded: 0,
+  importable: 0,
+  imported: 0,
+  failed: 0,
+}
+
+type ExcelStatus = {
+  uploaded: number
+  newCount: number
+  poCount: number
+}
+
+const emptyExcel: ExcelStatus = {
+  uploaded: 0,
+  newCount: 0,
+  poCount: 0,
+}
+
+const mainButton = {
+  padding: '11px 18px',
+  borderRadius: 8,
+  fontSize: 15,
+  fontWeight: 800,
   cursor: 'pointer',
+}
+
+function identity(file: File) {
+  return `${file.name}:${file.size}:${file.lastModified}`
 }
 
 export default function CombinedUploadShell({
   children,
-}: Props) {
-  const sharedInput = useRef<HTMLInputElement>(null)
-  const pdfArea = useRef<HTMLDivElement>(null)
-  const excelArea = useRef<HTMLDivElement>(null)
+}: {
+  children: ReactNode
+}) {
+  const router = useRouter()
+  const inputRef = useRef<HTMLInputElement>(null)
 
+  const pdfController = useRef<PdfController | null>(null)
+  const excelController = useRef<ExcelSyncController | null>(
+    null
+  )
+
+  const [staged, setStaged] = useState<File[]>([])
   const [dragging, setDragging] = useState(false)
-  const [pdfCount, setPdfCount] = useState(0)
-  const [excelCount, setExcelCount] = useState(0)
-  const [queuedPdfs, setQueuedPdfs] = useState<File[]>([])
-  const [message, setMessage] = useState('')
+  const [working, setWorking] = useState(false)
+
+  const [pdfStatus, setPdfStatus] = useState(emptyPdf)
+  const [excelStatus, setExcelStatus] =
+    useState(emptyExcel)
+
   const [error, setError] = useState('')
 
-  function forward(
-    area: HTMLDivElement | null,
-    selector: string,
-    files: File[]
-  ) {
-    const input = area?.querySelector<HTMLInputElement>(
-      selector
+  const registerPdf = useCallback(
+    (controller: PdfController | null) => {
+      pdfController.current = controller
+    },
+    []
+  )
+
+  const registerExcel = useCallback(
+    (controller: ExcelSyncController | null) => {
+      excelController.current = controller
+    },
+    []
+  )
+
+  const reportPdf = useCallback(
+    (status: PdfStatus) => setPdfStatus(status),
+    []
+  )
+
+  const reportExcel = useCallback(
+    (status: ExcelStatus) => setExcelStatus(status),
+    []
+  )
+
+  const bridge = useMemo(
+    () => ({
+      registerPdf,
+      reportPdf,
+    }),
+    [registerPdf, reportPdf]
+  )
+
+  function stageFiles(files: File[]) {
+    if (working || !files.length) return
+
+    const invalid = files.filter(
+      (file) =>
+        !file.name.toLowerCase().endsWith('.pdf') &&
+        !file.name.toLowerCase().endsWith('.xlsx')
     )
 
-    if (!input) {
-      throw new Error(
-        `The existing ${selector.includes('pdf') ? 'PDF' : 'Excel'} ` +
-        'file input could not be found.'
-      )
-    }
-
-    const transfer = new DataTransfer()
-
-    files.forEach((file) => transfer.items.add(file))
-
-    input.files = transfer.files
-
-    // This triggers the existing React file-change handler.
-    input.dispatchEvent(
-      new Event('change', { bubbles: true })
+    const valid = files.filter(
+      (file) => !invalid.includes(file)
     )
 
-    return input.multiple
-  }
+    setStaged((current) => {
+      const known = new Set(current.map(identity))
 
-  function routeFiles(files: File[]) {
-    const pdfs = files.filter((file) =>
-      file.name.toLowerCase().endsWith('.pdf')
-    )
+      return [
+        ...current,
+        ...valid.filter((file) => {
+          const key = identity(file)
 
-    const excels = files.filter((file) =>
-      file.name.toLowerCase().endsWith('.xlsx')
-    )
+          if (known.has(key)) return false
 
-    const unsupported = files.filter(
-      (file) => !pdfs.includes(file) && !excels.includes(file)
-    )
+          known.add(key)
+          return true
+        }),
+      ]
+    })
 
-    setError('')
-    setMessage('')
-
-    const messages: string[] = []
-
-    try {
-      if (pdfs.length) {
-        const input = pdfArea.current
-          ?.querySelector<HTMLInputElement>(
-            'input[type="file"][accept*="pdf"]'
-          )
-
-        if (!input) {
-          throw new Error(
-            'Could not locate the existing PDF upload input.'
-          )
-        }
-
-        const accepted = input.multiple
-          ? pdfs
-          : pdfs.slice(0, 1)
-
-        forward(
-          pdfArea.current,
-          'input[type="file"][accept*="pdf"]',
-          accepted
-        )
-
-        setPdfCount(accepted.length)
-
-        setQueuedPdfs(
-          input.multiple ? [] : pdfs.slice(1)
-        )
-
-        messages.push(
-          `${accepted.length} PDF file(s) selected`
-        )
-      }
-
-      if (excels.length) {
-        forward(
-          excelArea.current,
-          'input[type="file"][accept*=".xlsx"]',
-          excels
-        )
-
-        setExcelCount((count) => count + excels.length)
-
-        messages.push(
-          `${excels.length} Excel file(s) sent for comparison`
-        )
-      }
-
-      if (unsupported.length) {
-        setError(
-          `Unsupported files: ${unsupported
+    setError(
+      invalid.length
+        ? `Unsupported file(s): ${invalid
             .map((file) => file.name)
-            .join(', ')}. Use PDF or XLSX.`
-        )
-      }
-
-      setMessage(messages.join(' · '))
-    } catch (caught) {
-      setError(
-        caught instanceof Error
-          ? caught.message
-          : 'Could not distribute uploaded files.'
-      )
-    }
+            .join(', ')}`
+        : ''
+    )
   }
 
-  function fileChange(event: ChangeEvent<HTMLInputElement>) {
-    routeFiles(Array.from(event.target.files ?? []))
+  function onInput(event: ChangeEvent<HTMLInputElement>) {
+    stageFiles(Array.from(event.target.files ?? []))
     event.target.value = ''
   }
 
-  function drop(event: DragEvent<HTMLDivElement>) {
+  function onDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault()
     setDragging(false)
-    routeFiles(Array.from(event.dataTransfer.files))
+    stageFiles(Array.from(event.dataTransfer.files))
   }
 
-  function loadNextPdf() {
-    if (!queuedPdfs.length) return
+  async function uploadFiles() {
+    if (working || staged.length === 0) return
 
-    const [next, ...remaining] = queuedPdfs
+    if (!pdfController.current ||
+        !excelController.current) {
+      setError('The upload screens are still loading.')
+      return
+    }
+
+    setWorking(true)
+    setError('')
+
+    const pdfFiles = staged.filter((file) =>
+      file.name.toLowerCase().endsWith('.pdf')
+    )
+
+    const excelFiles = staged.filter((file) =>
+      file.name.toLowerCase().endsWith('.xlsx')
+    )
+
+    const failed: File[] = []
+    const messages: string[] = []
 
     try {
-      forward(
-        pdfArea.current,
-        'input[type="file"][accept*="pdf"]',
-        [next]
-      )
+      if (pdfFiles.length) {
+        try {
+          const result =
+            await pdfController.current.upload(pdfFiles)
 
-      setQueuedPdfs(remaining)
-      setPdfCount(1)
+          failed.push(...result.failed)
+          messages.push(...result.errors)
+        } catch (caught) {
+          failed.push(...pdfFiles)
+          messages.push(
+            caught instanceof Error
+              ? caught.message
+              : 'PDF upload failed.'
+          )
+        }
+      }
 
-      setMessage(
-        `${next.name} selected. Parse and review this PDF before moving on.`
+      if (excelFiles.length) {
+        try {
+          const result =
+            await excelController.current.upload(excelFiles)
+
+          failed.push(...result.failed)
+          messages.push(...result.errors)
+        } catch (caught) {
+          failed.push(...excelFiles)
+          messages.push(
+            caught instanceof Error
+              ? caught.message
+              : 'Excel upload failed.'
+          )
+        }
+      }
+
+      // Successfully processed files leave the queue.
+      // Failed files remain available for retry.
+      setStaged(failed)
+
+      if (messages.length) {
+        setError(messages.join('\n'))
+      }
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  async function importRequisitions() {
+    if (working) return
+
+    if (staged.length) {
+      setError(
+        'Upload the remaining selected files before importing.'
       )
-      setError('')
+      return
+    }
+
+    const pdf = pdfController.current
+    const excel = excelController.current
+
+    if (!pdf || !excel) {
+      setError('The import screens are still loading.')
+      return
+    }
+
+    const hasPdf = pdfStatus.importable > 0
+    const hasExcel = excelStatus.newCount > 0
+
+    if (!hasPdf && !hasExcel) return
+
+    const problems: string[] = []
+
+    // Validate both types before writing any orders.
+    if (hasExcel) {
+      problems.push(...excel.validateImport())
+    }
+
+    if (hasPdf) {
+      problems.push(...pdf.validateImport())
+    }
+
+    if (problems.length) {
+      setError(problems.join('\n'))
+      return
+    }
+
+    setWorking(true)
+    setError('')
+
+    let successful = 0
+    let failed = false
+
+    try {
+      // Excel goes first so its review confirmation is
+      // accepted before any PDF orders are inserted.
+      if (hasExcel) {
+        const result = await excel.importAll()
+
+        if (result.cancelled) return
+
+        successful += result.succeeded
+
+        if (result.failed > 0) {
+          failed = true
+        }
+      }
+
+      // A failed Excel import stops the PDF portion.
+      if (failed) {
+        setError(
+          'The Excel import did not complete. Review the error below.'
+        )
+        return
+      }
+
+      if (hasPdf) {
+        const result = await pdf.importAll()
+
+        successful += result.succeeded
+
+        if (result.failed > 0 || result.cancelled) {
+          failed = true
+        }
+      }
+
+      if (failed) {
+        setError(
+          'One or more requisitions were not imported. ' +
+          'Check the review cards before retrying.'
+        )
+        return
+      }
+
+      if (successful > 0) {
+        router.replace('/orders')
+        router.refresh()
+      }
     } catch (caught) {
       setError(
         caught instanceof Error
           ? caught.message
-          : 'Could not select the next PDF.'
+          : 'Import did not complete.'
       )
+    } finally {
+      setWorking(false)
     }
   }
 
+  function clearAll() {
+    if (working) return
+
+    pdfController.current?.reset()
+    excelController.current?.reset()
+
+    setStaged([])
+    setPdfStatus(emptyPdf)
+    setExcelStatus(emptyExcel)
+    setError('')
+
+    if (inputRef.current) {
+      inputRef.current.value = ''
+    }
+  }
+
+  const uploaded =
+    pdfStatus.uploaded + excelStatus.uploaded
+
+  const importable =
+    pdfStatus.importable + excelStatus.newCount
+
+  const showPdf =
+    pdfStatus.uploaded > 0 ||
+    pdfStatus.failed > 0
+
+  const showExcel = excelStatus.uploaded > 0
+
   return (
-    <div
-      className="requisition-combined-upload"
-      style={{
-        maxWidth: 1350,
-        margin: '0 auto',
-        padding: '24px 18px 65px',
-      }}
-    >
-      <style>{`
-        .requisition-combined-upload
-        .combined-excel-review > main > nav,
-        .requisition-combined-upload
-        .combined-excel-review > main > header,
-        .requisition-combined-upload
-        .combined-excel-review > main > section:first-of-type {
-          display: none !important;
-        }
-
-        .requisition-combined-upload
-        .combined-pdf-review
-        input[type="file"][accept*="pdf"] + div {
-          display: none !important;
-        }
-      `}</style>
-
-      <header
+    <PdfUploadContext.Provider value={bridge}>
+      <main
         style={{
-          background: '#166534',
-          borderRadius: 14,
-          padding: '23px 25px',
-          color: '#fff',
-          marginBottom: 18,
+          maxWidth: 1320,
+          margin: '0 auto',
+          padding: '20px 20px 70px',
+          color: '#111827',
         }}
       >
-        <h1
+        <Link
+          href="/orders"
           style={{
-            fontSize: 28,
-            fontWeight: 800,
+            display: 'inline-block',
+            padding: '10px 16px',
+            border: '2px solid #111',
+            borderRadius: 8,
+            background: '#fff',
+            color: '#111',
+            fontWeight: 700,
+            textDecoration: 'none',
+            marginBottom: 20,
           }}
         >
-          Upload Requisitions
-        </h1>
+          Back to Orders
+        </Link>
 
-        <p style={{ marginTop: 8 }}>
-          PDF Parsing + Excel Synchronisation
-        </p>
-      </header>
+        <input
+          ref={inputRef}
+          type="file"
+          accept=".pdf,.xlsx,application/pdf"
+          multiple
+          style={{ display: 'none' }}
+          onChange={onInput}
+        />
 
-      <section
-        style={{
-          padding: 18,
-          border: '1px solid #d1d5db',
-          borderRadius: 13,
-          background: '#fff',
-          marginBottom: 18,
-        }}
-      >
         <div
+          onClick={() => {
+            if (!working) inputRef.current?.click()
+          }}
           onDragOver={(event) => {
             event.preventDefault()
-            setDragging(true)
+            if (!working) setDragging(true)
           }}
           onDragLeave={(event) => {
             event.preventDefault()
             setDragging(false)
           }}
-          onDrop={drop}
+          onDrop={onDrop}
           style={{
-            textAlign: 'center',
-            padding: '40px 18px',
+            padding: '38px 24px',
             border: dragging
-              ? '3px dashed #16a34a'
-              : '2px dashed #9ca3af',
-            background: dragging
-              ? '#ecfdf5'
-              : '#f8fafc',
+              ? '3px solid #16a34a'
+              : '2px dashed #888',
             borderRadius: 12,
+            background: dragging
+              ? '#f0fdf4'
+              : '#fafafa',
+            cursor: working ? 'wait' : 'pointer',
+            textAlign: 'center',
           }}
         >
-          <div style={{ fontSize: 40 }}>
-            📄 📊
-          </div>
-
-          <h2
+          <div
             style={{
               fontSize: 22,
               fontWeight: 800,
-              color: '#111827',
-              marginTop: 11,
+              marginBottom: 8,
             }}
           >
-            Drag PDF or Excel files here
-          </h2>
+            Drag PDF or Excel requisitions here
+          </div>
 
-          <p
+          <div style={{ fontSize: 17 }}>
+            Or click to choose one or multiple files
+          </div>
+        </div>
+
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            gap: 11,
+            marginTop: 18,
+          }}
+        >
+          <button
+            type="button"
+            disabled={working || staged.length === 0}
+            onClick={() => void uploadFiles()}
             style={{
-              color: '#64748b',
-              margin: '9px 0 18px',
+              ...mainButton,
+              border: '2px solid #166534',
+              background: '#16a34a',
+              color: '#fff',
+              opacity:
+                working || staged.length === 0 ? 0.5 : 1,
             }}
           >
-            One upload box for both file types.
-          </p>
-
-          <input
-            ref={sharedInput}
-            type="file"
-            multiple
-            accept=".pdf,.xlsx,application/pdf"
-            style={{ display: 'none' }}
-            onChange={fileChange}
-          />
+            {working
+              ? 'Processing...'
+              : `Upload Files (${staged.length})`}
+          </button>
 
           <button
             type="button"
+            disabled={
+              working ||
+              importable === 0 ||
+              staged.length > 0
+            }
+            onClick={() => void importRequisitions()}
             style={{
-              ...button,
-              background: '#15803d',
+              ...mainButton,
+              border: '2px solid #1d4ed8',
+              background: '#2563eb',
               color: '#fff',
-              border: 0,
+              opacity:
+                working ||
+                importable === 0 ||
+                staged.length > 0
+                  ? 0.5
+                  : 1,
             }}
-            onClick={() => sharedInput.current?.click()}
           >
-            Choose Files
+            {working
+              ? 'Processing...'
+              : `Import Requisitions (${importable})`}
           </button>
 
-          <p
+          <button
+            type="button"
+            disabled={working}
+            onClick={clearAll}
             style={{
-              fontSize: 12,
-              color: '#64748b',
-              marginTop: 13,
+              ...mainButton,
+              border: '1px solid #aaa',
+              background: '#fff',
+              color: '#111',
             }}
           >
-            PDF or XLSX · Review before importing
-          </p>
+            Clear All
+          </button>
         </div>
 
-        {message && (
-          <p
-            role="status"
-            style={{
-              marginTop: 12,
-              padding: 10,
-              borderRadius: 8,
-              color: '#166534',
-              background: '#f0fdf4',
-            }}
-          >
-            {message}
-          </p>
-        )}
+        <p
+          style={{
+            marginTop: 15,
+            fontWeight: 700,
+            fontSize: 14,
+          }}
+        >
+          Uploaded: {uploaded}
+        </p>
 
         {error && (
           <p
             role="alert"
             style={{
-              marginTop: 12,
-              padding: 10,
+              marginTop: 13,
+              padding: 12,
               borderRadius: 8,
-              color: '#b91c1c',
               background: '#fef2f2',
+              color: '#b91c1c',
+              whiteSpace: 'pre-wrap',
             }}
           >
             {error}
           </p>
         )}
 
-        {queuedPdfs.length > 0 && (
-          <div
-            style={{
-              marginTop: 12,
-              padding: 12,
-              background: '#fffbeb',
-              borderRadius: 8,
-            }}
-          >
-            <p>
-              {queuedPdfs.length} PDF(s) remaining.
-              Your existing PDF importer accepts one at a time.
-            </p>
+        <div
+          style={{
+            display: showPdf ? 'block' : 'none',
+            marginTop: 22,
+          }}
+        >
+          {children}
+        </div>
 
-            <button
-              type="button"
-              style={{ ...button, marginTop: 9 }}
-              onClick={loadNextPdf}
-            >
-              Load Next PDF
-            </button>
-          </div>
-        )}
-      </section>
+        <div
+          style={{
+            display: showExcel ? 'block' : 'none',
+            marginTop: 22,
+          }}
+        >
+          <ExcelSyncPage
+            embedded
+            onRegister={registerExcel}
+            onStatus={reportExcel}
+          />
+        </div>
 
-      <section
-        style={{
-          border: '1px solid #d1d5db',
-          borderRadius: 12,
-          background: '#fff',
-          marginBottom: 18,
-        }}
-      >
-        <details open={pdfCount > 0}>
-          <summary
-            style={{
-              padding: 17,
-              fontSize: 19,
-              fontWeight: 800,
-              cursor: 'pointer',
-            }}
-          >
-            Parsed PDF Requisitions
-          </summary>
-
-          <div
-            ref={pdfArea}
-            className="combined-pdf-review"
-          >
-            {children}
-          </div>
-        </details>
-      </section>
-
-      <section
-        style={{
-          border: '1px solid #d1d5db',
-          borderRadius: 12,
-          background: '#fff',
-        }}
-      >
-        <details open={excelCount > 0}>
-          <summary
-            style={{
-              padding: 17,
-              fontSize: 19,
-              fontWeight: 800,
-              cursor: 'pointer',
-            }}
-          >
-            Excel Synchronisation
-          </summary>
-
-          <div
-            ref={excelArea}
-            className="combined-excel-review"
-          >
-            <ExcelSyncPage />
-          </div>
-        </details>
-      </section>
-
-      <button
-        type="button"
-        onClick={() =>
-          window.scrollTo({
-            top: 0,
-            behavior: 'smooth',
-          })
-        }
-        style={{
-          position: 'fixed',
-          bottom: 20,
-          right: 20,
-          zIndex: 1000,
-          padding: '12px 17px',
-          border: '1px solid white',
-          borderRadius: 25,
-          background: '#111827',
-          color: '#fff',
-          fontWeight: 700,
-          cursor: 'pointer',
-          boxShadow: '0 3px 12px rgba(0,0,0,0.25)',
-        }}
-      >
-        ↑ Back to Top
-      </button>
-    </div>
+        <button
+          type="button"
+          onClick={() =>
+            window.scrollTo({
+              top: 0,
+              behavior: 'smooth',
+            })
+          }
+          style={{
+            position: 'fixed',
+            right: 20,
+            bottom: 20,
+            zIndex: 1000,
+            padding: '12px 17px',
+            borderRadius: 25,
+            border: '1px solid #fff',
+            background: '#111827',
+            color: '#fff',
+            fontWeight: 700,
+            cursor: 'pointer',
+            boxShadow:
+              '0 3px 12px rgba(0,0,0,0.25)',
+          }}
+        >
+          ↑ Back to Top
+        </button>
+      </main>
+    </PdfUploadContext.Provider>
   )
 }

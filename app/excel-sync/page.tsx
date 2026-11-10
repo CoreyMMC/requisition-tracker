@@ -2,22 +2,67 @@
 'use client'
 
 import Link from 'next/link'
-import { useMemo, useRef, useState } from 'react'
-import type { CSSProperties, DragEvent } from 'react'
+import { useRouter } from 'next/navigation'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
+import type {
+  CSSProperties,
+  DragEvent,
+} from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { parseRequisitionsExcel } from '@/lib/parse-requisitions-excel'
+import { formatPoNumbers } from '@/lib/po-numbers'
 import {
   combineExports,
   compareExports,
-  type Coverage,
   type UploadedExport,
   type SavedOrder,
   type HistoricalEntry,
-  type ReviewGroup,
   type ReviewResult,
 } from '@/lib/excel-sync-review'
 import PoSyncControls from './po-sync-controls'
 import NewOrderImport from './new-order-import'
+import type {
+  NewOrderController,
+} from './new-order-import'
+
+type UploadResult = {
+  succeeded: number
+  failed: File[]
+  errors: string[]
+}
+
+type ImportResult = {
+  succeeded: number
+  failed: number
+  cancelled: boolean
+}
+
+export type ExcelSyncController = {
+  upload: (files: File[]) => Promise<UploadResult>
+  validateImport: () => string[]
+  importAll: () => Promise<ImportResult>
+  reset: () => void
+}
+
+type ExcelStatus = {
+  uploaded: number
+  newCount: number
+  poCount: number
+}
+
+type Props = {
+  embedded?: boolean
+  onRegister?: (
+    controller: ExcelSyncController | null
+  ) => void
+  onStatus?: (status: ExcelStatus) => void
+}
 
 type Snapshot = {
   orders: SavedOrder[]
@@ -26,92 +71,83 @@ type Snapshot = {
 }
 
 const panel: CSSProperties = {
-  background: '#fff',
-  border: '1px solid #d7dde3',
-  borderRadius: 12,
-  padding: 18,
+  padding: 17,
   marginBottom: 16,
+  border: '1px solid #d1d5db',
+  borderRadius: 11,
   color: '#111827',
+  background: '#fff',
 }
 
 const button: CSSProperties = {
+  padding: '10px 15px',
   border: '1px solid #b9c2cc',
   borderRadius: 8,
-  background: '#fff',
   color: '#111827',
-  padding: '10px 15px',
+  background: '#fff',
   fontWeight: 700,
   cursor: 'pointer',
 }
 
-const input: CSSProperties = {
-  width: '100%',
-  padding: 9,
-  background: '#fff',
-  color: '#111827',
-  border: '1px solid #b9c2cc',
-  borderRadius: 7,
-  boxSizing: 'border-box',
-}
-
 const muted: CSSProperties = {
-  color: '#64748b',
   fontSize: 13,
+  color: '#64748b',
 }
 
-function dateText(date: string | null) {
-  if (!date) return 'Not recorded'
-  const parts = date.match(/^(\d{4})-(\d{2})-(\d{2})/)
-  return parts
-    ? `${parts[3]}/${parts[2]}/${parts[1]}`
-    : date
+function fileIdentity(file: File) {
+  return `${file.name}:${file.size}:${file.lastModified}`
 }
 
-function ExcelLineTable({ item }: { item: ReviewResult }) {
+function ExcelLines({ item }: { item: ReviewResult }) {
   const lines = item.combined.requisition.lines
 
   return (
-    <div style={{ overflowX: 'auto', marginTop: 14 }}>
+    <div style={{ overflowX: 'auto', marginTop: 13 }}>
       <table
         style={{
           width: '100%',
-          minWidth: 610,
+          minWidth: 590,
           borderCollapse: 'collapse',
           fontSize: 13,
         }}
       >
         <thead style={{ background: '#f1f5f9' }}>
           <tr>
-            {['Item No.', 'Description', 'Qty', 'Amount'].map(
-              (heading) => (
-                <th
-                  key={heading}
-                  style={{
-                    padding: 10,
-                    textAlign: 'left',
-                    borderBottom: '1px solid #cbd5e1',
-                  }}
-                >
-                  {heading}
-                </th>
-              )
-            )}
+            {[
+              'Item No.',
+              'Description',
+              'Qty',
+              'Amount',
+            ].map((heading) => (
+              <th
+                key={heading}
+                style={{
+                  padding: 9,
+                  textAlign: 'left',
+                }}
+              >
+                {heading}
+              </th>
+            ))}
           </tr>
         </thead>
 
         <tbody>
           {lines.map((line, index) => (
             <tr key={`${line.row}-${index}`}>
-              <td style={{ padding: 9, borderBottom: '1px solid #eee' }}>
+              <td style={{ padding: 8 }}>
                 {line.item || '—'}
               </td>
-              <td style={{ padding: 9, borderBottom: '1px solid #eee' }}>
+
+              <td style={{ padding: 8 }}>
                 {line.description}
               </td>
-              <td style={{ padding: 9, borderBottom: '1px solid #eee' }}>
+
+              <td style={{ padding: 8 }}>
                 {line.quantity ?? '—'}
               </td>
-              <td style={{ padding: 9, borderBottom: '1px solid #eee' }}>
+
+              <td style={{ padding: 8 }}>
                 {line.amount == null
                   ? '—'
                   : `$${line.amount.toFixed(2)}`}
@@ -124,239 +160,200 @@ function ExcelLineTable({ item }: { item: ReviewResult }) {
   )
 }
 
-function ReviewCard({
-  item,
-  defaultOpen,
-  busy,
-  baseline,
-  onMark,
-  onUnmark,
-}: {
-  item: ReviewResult
-  defaultOpen: boolean
-  busy: boolean
-  baseline: boolean
-  onMark: (number: string) => void
-  onUnmark: (number: string) => void
-}) {
-  const req = item.combined.requisition
-
-  return (
-    <details
-      open
-      style={{
-        background: '#fff',
-        border: '1px solid #d9e0e7',
-        borderRadius: 10,
-        padding: 14,
-        marginTop: 10,
-      }}
-    >
-      <summary
-        style={{
-          cursor: 'pointer',
-          fontWeight: 800,
-          fontSize: 15,
-        }}
-      >
-        {req.number}
-        <span style={{ ...muted, marginLeft: 10 }}>
-          {req.lines.length} lines · {req.enteredBy || 'Unknown staff'}
-        </span>
-      </summary>
-
-      <div style={{ marginTop: 14, lineHeight: 1.7 }}>
-        <p><strong>Excel Status:</strong> {req.statuses.join(' / ')}</p>
-        <p><strong>Sources:</strong> {item.combined.sources.join(', ')}</p>
-        <p>
-          <strong>Delivery:</strong>{' '}
-          {req.locations.join(' / ') || 'Unknown'}
-        </p>
-
-        {item.saved && (
-          <div
-            style={{
-              background: '#eff6ff',
-              padding: 12,
-              borderRadius: 8,
-              marginTop: 12,
-            }}
-          >
-            <strong>Existing Order</strong>
-            <p>Date: {dateText(item.saved.order_date)}</p>
-            <p>Order Type: {item.saved.title || 'Not recorded'}</p>
-            <p>Level: {item.saved.level ?? 'Not recorded'}</p>
-            <p>PO: {item.saved.po_number || '(blank)'}</p>
-          </div>
-        )}
-
-        {item.combined.issues.length > 0 && (
-          <div
-            style={{
-              padding: 12,
-              background: '#fffbeb',
-              border: '1px solid #fde68a',
-              borderRadius: 8,
-              marginTop: 12,
-            }}
-          >
-            <strong>Issues requiring review</strong>
-            <ul style={{ paddingLeft: 20, marginTop: 7 }}>
-              {item.combined.issues.map((issue, index) => (
-                <li key={index}>{issue}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {item.group === 'review' &&
-          baseline &&
-          !item.saved &&
-          !item.historical && (
-            <button
-              type="button"
-              style={{ ...button, marginTop: 13 }}
-              disabled={busy}
-              onClick={() => onMark(req.number)}
-            >
-              Mark Historical Only
-            </button>
-          )}
-
-        {item.historical?.disposition === 'historical_only' && (
-          <button
-            type="button"
-            style={{ ...button, marginTop: 13 }}
-            disabled={busy}
-            onClick={() => onUnmark(req.number)}
-          >
-            Return to Review
-          </button>
-        )}
-
-        <ExcelLineTable item={item} />
-      </div>
-    </details>
-  )
-}
-
-function ReviewSection({
+function ReviewGroup({
   title,
   items,
-  initialOpen,
-  baseline,
-  busy,
+  initiallyExpanded,
   onMark,
   onUnmark,
 }: {
   title: string
   items: ReviewResult[]
-  initialOpen: boolean
-  baseline: boolean
-  busy: boolean
+  initiallyExpanded: boolean
   onMark: (number: string) => void
   onUnmark: (number: string) => void
 }) {
-  const [visible, setVisible] = useState(initialOpen)
-  const [allOpen, setAllOpen] = useState(initialOpen)
-  const [version, setVersion] = useState(0)
-
-  function expand(value: boolean) {
-    setAllOpen(value)
-    setVersion((current) => current + 1)
-  }
+  if (!items.length) return null
 
   return (
-    <section style={panel}>
-      <div
+    <details
+      ref={(element) => {
+        if (element && !element.dataset.initialised) {
+          element.open = initiallyExpanded
+          element.dataset.initialised = '1'
+        }
+      }}
+      style={panel}
+    >
+      <summary
         style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: 10,
+          fontSize: 20,
+          fontWeight: 800,
+          cursor: 'pointer',
         }}
       >
-        <h2 style={{ fontSize: 20, fontWeight: 800 }}>
-          {title} ({items.length})
-        </h2>
+        {title} ({items.length})
+      </summary>
 
-        <button
-          type="button"
-          style={button}
-          onClick={() => setVisible((current) => !current)}
-        >
-          {visible ? 'Minimise Section' : 'Show Section'}
-        </button>
-      </div>
+      {items.map((item) => {
+        const req = item.combined.requisition
 
-      {visible && (
-        <>
-          <div
+        return (
+          <details
+            key={req.number}
+            ref={(element) => {
+              if (
+                element &&
+                !element.dataset.initialised
+              ) {
+                element.open = initiallyExpanded
+                element.dataset.initialised = '1'
+              }
+            }}
             style={{
-              display: 'flex',
-              gap: 9,
-              marginTop: 12,
+              padding: 13,
+              marginTop: 11,
+              border: '1px solid #d9e2eb',
+              borderRadius: 9,
+              background: '#f8fafc',
             }}
           >
-            <button
-              type="button"
-              style={button}
-              onClick={() => expand(true)}
+            <summary
+              style={{
+                cursor: 'pointer',
+                fontWeight: 800,
+              }}
             >
-              Expand All
-            </button>
-            <button
-              type="button"
-              style={button}
-              onClick={() => expand(false)}
-            >
-              Collapse All
-            </button>
-          </div>
+              Requisition {req.number}
+              {' · '}
+              {req.lines.length} items
+            </summary>
 
-          {items.length === 0 && (
-            <p style={{ ...muted, marginTop: 13 }}>
-              No requisitions in this section.
-            </p>
-          )}
+            <div style={{ marginTop: 12 }}>
+              <p style={muted}>
+                {req.enteredBy || 'Unknown staff'}
+                {' · '}
+                {req.statuses.join(' / ')}
+              </p>
 
-          {items.map((item) => (
-            <ReviewCard
-              key={`${version}-${item.combined.requisition.number}`}
-              item={item}
-              defaultOpen={allOpen}
-              busy={busy}
-              baseline={baseline}
-              onMark={onMark}
-              onUnmark={onUnmark}
-            />
-          ))}
-        </>
-      )}
-    </section>
+              <p style={{ marginTop: 8 }}>
+                <strong>Delivery:</strong>{' '}
+                {req.locations.join(' / ') || 'Unknown'}
+              </p>
+
+              <p style={{ marginTop: 8 }}>
+                <strong>PO / Transfer:</strong>{' '}
+                {formatPoNumbers(
+                  [...req.pos, ...req.transfers].join(' ')
+                ) || '—'}
+              </p>
+
+              {item.combined.issues.length > 0 && (
+                <div
+                  style={{
+                    marginTop: 12,
+                    padding: 12,
+                    borderRadius: 8,
+                    background: '#fffbeb',
+                  }}
+                >
+                  {item.combined.issues.map(
+                    (issue, index) => (
+                      <p key={index}>{issue}</p>
+                    )
+                  )}
+                </div>
+              )}
+
+              {item.group === 'review' &&
+                !item.saved &&
+                !item.historical && (
+                  <button
+                    type="button"
+                    style={{
+                      ...button,
+                      marginTop: 12,
+                    }}
+                    onClick={() => onMark(req.number)}
+                  >
+                    Mark Historical Only
+                  </button>
+                )}
+
+              {item.historical?.disposition ===
+                'historical_only' && (
+                <button
+                  type="button"
+                  style={{
+                    ...button,
+                    marginTop: 12,
+                  }}
+                  onClick={() => onUnmark(req.number)}
+                >
+                  Return to Review
+                </button>
+              )}
+
+              <ExcelLines item={item} />
+            </div>
+          </details>
+        )
+      })}
+    </details>
   )
 }
 
-export default function ExcelSyncPage() {
+export default function ExcelSyncPage({
+  embedded = false,
+  onRegister,
+  onStatus,
+}: Props) {
+  const router = useRouter()
   const supabase = useMemo(() => createClient(), [])
   const fileInput = useRef<HTMLInputElement>(null)
-  const working = useRef(false)
+
+  const processing = useRef(false)
+  const uploadsRef = useRef<UploadedExport[]>([])
+  const newController = useRef<NewOrderController | null>(
+    null
+  )
 
   const [uploads, setUploads] = useState<UploadedExport[]>([])
-  const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(
+    null
+  )
+  const [pending, setPending] = useState<File[]>([])
+  const [dragging, setDragging] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [dragActive, setDragActive] = useState(false)
-  const [search, setSearch] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+
+  const registerNew = useCallback(
+    (controller: NewOrderController | null) => {
+      newController.current = controller
+    },
+    []
+  )
+
+  function reset() {
+    if (processing.current) return
+
+    uploadsRef.current = []
+    setUploads([])
+    setSnapshot(null)
+    setPending([])
+    setError('')
+    setNotice('')
+  }
 
   async function loadSnapshot() {
     const { data: auth, error: authError } =
       await supabase.auth.getUser()
 
     if (authError || !auth.user) {
-      throw new Error('Please sign in first.')
+      throw new Error(
+        'Please sign in to Requisition Tracker.'
+      )
     }
 
     const orders: SavedOrder[] = []
@@ -365,14 +362,19 @@ export default function ExcelSyncPage() {
     for (let start = 0; ; start += 1000) {
       const { data, error: queryError } = await supabase
         .from('orders')
-        .select('id,requisition_number,po_number,order_date,title,level')
+        .select(
+          'id,requisition_number,po_number,order_date,title,level'
+        )
         .order('id')
         .range(start, start + 999)
 
-      if (queryError) throw new Error(queryError.message)
+      if (queryError) {
+        throw new Error(queryError.message)
+      }
 
       const page = (data ?? []) as SavedOrder[]
       orders.push(...page)
+
       if (page.length < 1000) break
     }
 
@@ -383,53 +385,86 @@ export default function ExcelSyncPage() {
         .order('requisition_number')
         .range(start, start + 999)
 
-      if (queryError) throw new Error(queryError.message)
+      if (queryError) {
+        throw new Error(queryError.message)
+      }
 
       const page = (data ?? []) as HistoricalEntry[]
       history.push(...page)
+
       if (page.length < 1000) break
     }
 
-    const { data: baselineRuns, error: runError } =
-      await supabase
-        .from('excel_sync_runs')
-        .select('id')
-        .eq('kind', 'baseline')
-        .limit(1)
+    const { data: runs, error: runError } = await supabase
+      .from('excel_sync_runs')
+      .select('id')
+      .eq('kind', 'baseline')
+      .limit(1)
 
-    if (runError) throw new Error(runError.message)
+    if (runError) {
+      throw new Error(runError.message)
+    }
 
     setSnapshot({
       orders,
       history,
-      baseline: (baselineRuns?.length ?? 0) > 0,
+      baseline: (runs?.length ?? 0) > 0,
     })
   }
 
-  async function addFiles(files: File[]) {
-    if (working.current || busy || files.length === 0) return
+  async function addFiles(
+    files: File[]
+  ): Promise<UploadResult> {
+    if (processing.current) {
+      return {
+        succeeded: 0,
+        failed: files,
+        errors: ['Excel importer is busy.'],
+      }
+    }
 
-    working.current = true
+    if (!files.length) {
+      return {
+        succeeded: 0,
+        failed: [],
+        errors: [],
+      }
+    }
+
+    processing.current = true
     setBusy(true)
     setError('')
     setNotice('')
 
-    try {
-      const seen = new Set(uploads.map((file) => file.id))
-      const added: UploadedExport[] = []
+    const known = new Set(
+      uploadsRef.current.map((file) => file.id)
+    )
 
+    const added: UploadedExport[] = []
+    const failed: File[] = []
+    const errors: string[] = []
+
+    let succeeded = 0
+
+    try {
       for (const file of files) {
         if (!file.name.toLowerCase().endsWith('.xlsx')) {
-          setError('Only XLSX Excel files are supported.')
+          failed.push(file)
+          errors.push(
+            `${file.name}: Only XLSX files are supported.`
+          )
           continue
         }
 
-        const id = `${file.name}:${file.size}:${file.lastModified}`
-        if (seen.has(id)) continue
-        seen.add(id)
+        const id = fileIdentity(file)
+
+        if (known.has(id)) continue
+
+        known.add(id)
 
         try {
-          const workbook = await parseRequisitionsExcel(file)
+          const workbook =
+            await parseRequisitionsExcel(file)
 
           added.push({
             id,
@@ -439,45 +474,54 @@ export default function ExcelSyncPage() {
             workbook,
             error: '',
           })
+
+          succeeded++
         } catch (caught) {
-          added.push({
-            id,
-            name: file.name,
-            label: file.name.replace(/\.xlsx$/i, ''),
-            coverage: 'unknown',
-            workbook: null,
-            error:
+          failed.push(file)
+          errors.push(
+            `${file.name}: ${
               caught instanceof Error
                 ? caught.message
-                : 'Unable to read Excel file.',
-          })
+                : 'Could not read Excel file.'
+            }`
+          )
         }
       }
 
-      setUploads((current) => [...current, ...added])
-      await loadSnapshot()
+      if (added.length) {
+        const next = [
+          ...uploadsRef.current,
+          ...added,
+        ]
 
-      setNotice(
-        added.length
-          ? `${added.filter((file) => file.workbook).length} spreadsheet(s) loaded.`
-          : 'These files have already been added.'
-      )
+        uploadsRef.current = next
+        setUploads(next)
+      }
+
+      await loadSnapshot()
     } catch (caught) {
-      setError(
+      const message =
         caught instanceof Error
           ? caught.message
-          : 'Could not load requisitions.'
-      )
+          : 'Could not compare the spreadsheets.'
+
+      errors.push(message)
+
+      // Comparison failed: retain the supplied files
+      // for another attempt after the error is resolved.
+      for (const file of files) {
+        if (!failed.includes(file)) failed.push(file)
+      }
     } finally {
-      working.current = false
+      processing.current = false
       setBusy(false)
     }
-  }
 
-  function onDrop(event: DragEvent<HTMLDivElement>) {
-    event.preventDefault()
-    setDragActive(false)
-    if (!busy) void addFiles(Array.from(event.dataTransfer.files))
+    if (errors.length) {
+      setError(errors.join('\n'))
+    }
+
+    return { succeeded, failed, errors }
   }
 
   const combined = useMemo(
@@ -486,21 +530,121 @@ export default function ExcelSyncPage() {
   )
 
   const compared = useMemo(
-    () => snapshot
-      ? compareExports(
-          combined.records,
-          snapshot.orders,
-          snapshot.history,
-          snapshot.baseline
-        )
-      : [],
+    () =>
+      snapshot
+        ? compareExports(
+            combined.records,
+            snapshot.orders,
+            snapshot.history,
+            snapshot.baseline
+          )
+        : [],
     [combined, snapshot]
   )
 
-  const validFiles = uploads.filter((file) => file.workbook !== null)
+  const validFiles = uploads.filter(
+    (file) => file.workbook !== null
+  )
+
+  const poItems = compared.filter(
+    (item) => item.group === 'po'
+  )
+
+  const newItems = compared.filter(
+    (item) => item.group === 'new'
+  )
+
+  const reviewItems = compared.filter(
+    (item) => item.group === 'review'
+  )
+
+  const historicalItems = compared.filter(
+    (item) => item.group === 'historical'
+  )
+
+  const unchangedItems = compared.filter(
+    (item) => item.group === 'unchanged'
+  )
+
+  useEffect(() => {
+    onStatus?.({
+      uploaded: snapshot ? validFiles.length : 0,
+      newCount: newItems.length,
+      poCount: poItems.length,
+    })
+  }, [
+    onStatus,
+    snapshot,
+    validFiles.length,
+    newItems.length,
+    poItems.length,
+  ])
+
+  function validateImport(): string[] {
+    if (!newItems.length) return []
+
+    if (!newController.current) {
+      return ['New requisition review is still loading.']
+    }
+
+    return newController.current.validateImport()
+  }
+
+  async function importAll(): Promise<ImportResult> {
+    if (!newItems.length) {
+      return {
+        succeeded: 0,
+        failed: 0,
+        cancelled: false,
+      }
+    }
+
+    if (!newController.current) {
+      setError('New requisition review is not ready.')
+
+      return {
+        succeeded: 0,
+        failed: newItems.length,
+        cancelled: false,
+      }
+    }
+
+    return newController.current.importAll()
+  }
+
+  const controllerRef =
+    useRef<ExcelSyncController | null>(null)
+
+  controllerRef.current = {
+    upload: addFiles,
+    validateImport,
+    importAll,
+    reset,
+  }
+
+  useEffect(() => {
+    if (!onRegister) return
+
+    const controller: ExcelSyncController = {
+      upload: (files) =>
+        controllerRef.current!.upload(files),
+      validateImport: () =>
+        controllerRef.current!.validateImport(),
+      importAll: () =>
+        controllerRef.current!.importAll(),
+      reset: () =>
+        controllerRef.current!.reset(),
+    }
+
+    onRegister(controller)
+
+    return () => onRegister(null)
+  }, [onRegister])
 
   const initialHistorical = compared.filter(
-    (item) => item.group === 'historical' && !item.historical
+    (item) =>
+      item.group === 'historical' &&
+      !item.historical
   )
 
   const readyForBaseline =
@@ -513,7 +657,9 @@ export default function ExcelSyncPage() {
         file.label.trim().length > 0
     ) &&
     new Set(
-      validFiles.map((file) => file.label.trim().toUpperCase())
+      validFiles.map(
+        (file) => file.label.trim().toUpperCase()
+      )
     ).size >= 5 &&
     initialHistorical.length > 0
 
@@ -521,14 +667,11 @@ export default function ExcelSyncPage() {
     if (!readyForBaseline || busy) return
 
     if (!window.confirm(
-      `Establish the historical baseline using ${validFiles.length} files?\n\n` +
-      `${initialHistorical.length} requisitions will be saved as historical.\n` +
-      `Existing orders will not be modified.`
+      `Save ${initialHistorical.length} historical requisitions?`
     )) return
 
     setBusy(true)
     setError('')
-    setNotice('')
 
     try {
       const { data, error: rpcError } = await supabase.rpc(
@@ -544,33 +687,38 @@ export default function ExcelSyncPage() {
         }
       )
 
-      if (rpcError) throw new Error(rpcError.message)
+      if (rpcError) throw rpcError
 
       await loadSnapshot()
-      setNotice(`Historical baseline saved: ${data} requisitions.`)
+
+      setNotice(
+        `${data} historical requisitions saved.`
+      )
     } catch (caught) {
       setError(
         caught instanceof Error
           ? caught.message
-          : 'Baseline could not be saved.'
+          : String(caught)
       )
     } finally {
       setBusy(false)
     }
   }
 
-  async function changeHistorical(number: string, remove: boolean) {
+  async function changeHistorical(
+    number: string,
+    remove: boolean
+  ) {
     if (!snapshot?.baseline || busy) return
 
     if (!window.confirm(
       remove
         ? `Return ${number} to review?`
-        : `Mark ${number} Historical Only?\n\nIt will be excluded from future new-order imports.`
+        : `Mark ${number} as historical only?`
     )) return
 
     setBusy(true)
     setError('')
-    setNotice('')
 
     try {
       const { error: rpcError } = await supabase.rpc(
@@ -580,504 +728,431 @@ export default function ExcelSyncPage() {
         { p_requisition_number: number }
       )
 
-      if (rpcError) throw new Error(rpcError.message)
+      if (rpcError) throw rpcError
 
       await loadSnapshot()
-      setNotice(
-        remove
-          ? `${number} returned to review.`
-          : `${number} marked Historical Only.`
-      )
     } catch (caught) {
       setError(
         caught instanceof Error
           ? caught.message
-          : 'Could not update historical decision.'
+          : String(caught)
       )
     } finally {
       setBusy(false)
     }
   }
 
-  const filtered = compared.filter((item) => {
-    const query = search.trim().toLowerCase()
-    const req = item.combined.requisition
-
-    return (
-      !query ||
-      req.number.toLowerCase().includes(query) ||
-      req.enteredBy.toLowerCase().includes(query) ||
-      item.combined.sources.some((source) =>
-        source.toLowerCase().includes(query)
-      ) ||
-      req.lines.some((line) =>
-        line.description.toLowerCase().includes(query)
+  function queueFiles(files: File[]) {
+    setPending((current) => {
+      const known = new Set(
+        current.map(fileIdentity)
       )
-    )
-  })
 
-  const byGroup = (group: ReviewGroup) =>
-    filtered.filter((item) => item.group === group)
+      return [
+        ...current,
+        ...files.filter((file) => {
+          if (
+            !file.name.toLowerCase().endsWith('.xlsx')
+          ) return false
 
-  const count = (group: ReviewGroup) =>
-    compared.filter((item) => item.group === group).length
+          const id = fileIdentity(file)
+
+          if (known.has(id)) return false
+
+          known.add(id)
+          return true
+        }),
+      ]
+    })
+  }
+
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault()
+    setDragging(false)
+    queueFiles(Array.from(event.dataTransfer.files))
+  }
+
+  async function standaloneUpload() {
+    const files = [...pending]
+    if (!files.length) return
+
+    const result = await addFiles(files)
+    setPending(result.failed)
+  }
+
+  async function standaloneImport() {
+    const problems = validateImport()
+
+    if (problems.length) {
+      setError(problems.join('\n'))
+      return
+    }
+
+    const result = await importAll()
+
+    if (
+      !result.cancelled &&
+      result.failed === 0 &&
+      result.succeeded > 0
+    ) {
+      router.replace('/orders')
+      router.refresh()
+    }
+  }
 
   return (
-    <main
+    <div
       style={{
+        color: '#111827',
         maxWidth: 1250,
         margin: '0 auto',
-        padding: '24px 16px 50px',
-        color: '#111827',
       }}
     >
-      <nav style={{ display: 'flex', gap: 18, marginBottom: 18 }}>
-        <Link href="/orders">← Orders</Link>
-        <Link href="/upload">Upload PDF</Link>
-      </nav>
+      {!embedded && (
+        <div style={{ padding: '22px 16px' }}>
+          <Link href="/upload">
+            ← Back to Upload
+          </Link>
 
-      <header
-        style={{
-          background: '#166534',
-          color: '#fff',
-          padding: 24,
-          borderRadius: 14,
-          marginBottom: 18,
-        }}
-      >
-        <h1 style={{ fontSize: 28, fontWeight: 800 }}>
-          Excel Synchronisation
-        </h1>
-
-        <p style={{ marginTop: 7 }}>
-          Review updated POs and new requisitions before saving.
-        </p>
-      </header>
-
-      <section style={panel}>
-        <h2 style={{ fontSize: 21, fontWeight: 800 }}>
-          Upload Excel Requisitions
-        </h2>
-
-        <p style={{ ...muted, marginTop: 7, marginBottom: 16 }}>
-          Upload one staff export or multiple XLSX spreadsheets.
-        </p>
-
-        <div
-          onDragOver={(event) => {
-            event.preventDefault()
-            if (!busy) setDragActive(true)
-          }}
-          onDragLeave={(event) => {
-            event.preventDefault()
-            setDragActive(false)
-          }}
-          onDrop={onDrop}
-          style={{
-            textAlign: 'center',
-            padding: '35px 20px',
-            border: dragActive
-              ? '3px dashed #15803d'
-              : '2px dashed #a7b7aa',
-            background: dragActive ? '#ecfdf5' : '#f8fbf9',
-            borderRadius: 12,
-          }}
-        >
-          <div style={{ fontSize: 40 }}>📊</div>
-
-          <h3
-            style={{
-              fontSize: 19,
-              fontWeight: 800,
-              margin: '10px 0',
+          <div
+            onDragOver={(event) => {
+              event.preventDefault()
+              setDragging(true)
             }}
-          >
-            Drag and drop Excel files here
-          </h3>
-
-          <p style={{ ...muted, marginBottom: 16 }}>
-            Or select files from your computer.
-          </p>
-
-          <input
-            ref={fileInput}
-            type="file"
-            multiple
-            accept=".xlsx"
-            disabled={busy}
-            style={{ display: 'none' }}
-            onChange={(event) => {
-              void addFiles(Array.from(event.target.files ?? []))
-              event.target.value = ''
+            onDragLeave={(event) => {
+              event.preventDefault()
+              setDragging(false)
             }}
-          />
-
-          <button
-            type="button"
-            disabled={busy}
+            onDrop={handleDrop}
             onClick={() => fileInput.current?.click()}
             style={{
-              ...button,
-              background: '#15803d',
-              color: '#fff',
-              padding: '13px 22px',
+              padding: 35,
+              marginTop: 17,
+              border: dragging
+                ? '3px solid #16a34a'
+                : '2px dashed #888',
+              borderRadius: 11,
+              background: '#fafafa',
+              textAlign: 'center',
+              cursor: 'pointer',
             }}
           >
-            {busy ? 'Processing...' : 'Choose Excel Files'}
-          </button>
+            <strong>
+              Drag Excel requisitions here
+            </strong>
 
-          <p style={{ ...muted, marginTop: 12 }}>
-            XLSX only · Nothing is imported until you confirm.
-          </p>
-        </div>
-
-        {uploads.length > 0 && (
-          <>
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginTop: 16,
-                gap: 10,
+            <input
+              ref={fileInput}
+              type="file"
+              multiple
+              accept=".xlsx"
+              style={{ display: 'none' }}
+              onChange={(event) => {
+                queueFiles(
+                  Array.from(event.target.files ?? [])
+                )
+                event.target.value = ''
               }}
+            />
+          </div>
+
+          <div
+            style={{
+              display: 'flex',
+              gap: 10,
+              flexWrap: 'wrap',
+              marginTop: 15,
+            }}
+          >
+            <button
+              type="button"
+              style={{
+                ...button,
+                color: '#fff',
+                background: '#16a34a',
+              }}
+              disabled={busy || pending.length === 0}
+              onClick={() => void standaloneUpload()}
             >
-              <strong>{uploads.length} file(s) loaded</strong>
+              Upload Files ({pending.length})
+            </button>
 
-              <button
-                type="button"
-                style={button}
-                disabled={busy}
-                onClick={() => {
-                  setUploads([])
-                  setSnapshot(null)
-                  setSearch('')
-                  setError('')
-                  setNotice('')
-                  if (fileInput.current) fileInput.current.value = ''
-                }}
-              >
-                Clear Files
-              </button>
-            </div>
+            <button
+              type="button"
+              style={{
+                ...button,
+                color: '#fff',
+                background: '#2563eb',
+              }}
+              disabled={busy || newItems.length === 0}
+              onClick={() => void standaloneImport()}
+            >
+              Import Requisitions ({newItems.length})
+            </button>
 
-            {uploads.map((file) => (
-              <div
-                key={file.id}
-                style={{
-                  background: '#f8fafc',
-                  padding: 13,
-                  border: '1px solid #e2e8f0',
-                  borderRadius: 9,
-                  marginTop: 11,
-                }}
-              >
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    gap: 10,
-                  }}
-                >
-                  <strong>{file.name}</strong>
-                  <button
-                    type="button"
-                    style={button}
-                    disabled={busy}
-                    onClick={() =>
-                      setUploads((current) =>
-                        current.filter((f) => f.id !== file.id)
-                      )
-                    }
-                  >
-                    Remove
-                  </button>
-                </div>
+            <button
+              type="button"
+              style={button}
+              disabled={busy}
+              onClick={reset}
+            >
+              Clear All
+            </button>
+          </div>
+        </div>
+      )}
 
-                {file.workbook ? (
-                  <p style={{ ...muted, margin: '7px 0' }}>
-                    {file.workbook.requisitions.length} eligible ·{' '}
-                    {file.workbook.excluded.length} excluded
-                  </p>
-                ) : (
-                  <p style={{ color: '#b91c1c' }}>
-                    {file.error || 'File could not be parsed.'}
-                  </p>
-                )}
+      {busy && (
+        <p style={{ ...muted, marginBottom: 13 }}>
+          Reading Excel spreadsheets...
+        </p>
+      )}
 
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns:
-                      'repeat(auto-fit,minmax(180px,1fr))',
-                    gap: 12,
-                    marginTop: 12,
-                  }}
-                >
-                  <label>
-                    <strong>Staff / Export Label</strong>
-                    <input
-                      style={{ ...input, marginTop: 6 }}
-                      value={file.label}
-                      disabled={busy}
-                      onChange={(event) =>
-                        setUploads((current) =>
-                          current.map((f) =>
-                            f.id === file.id
-                              ? { ...f, label: event.target.value }
-                              : f
-                          )
-                        )
-                      }
-                    />
-                  </label>
+      {error && (
+        <p
+          role="alert"
+          style={{
+            ...panel,
+            background: '#fef2f2',
+            color: '#b91c1c',
+            whiteSpace: 'pre-wrap',
+          }}
+        >
+          {error}
+        </p>
+      )}
 
-                  <label>
-                    <strong>Level Coverage</strong>
-                    <select
-                      style={{ ...input, marginTop: 6 }}
-                      value={file.coverage}
-                      disabled={busy}
-                      onChange={(event) =>
-                        setUploads((current) =>
-                          current.map((f) =>
-                            f.id === file.id
-                              ? {
-                                  ...f,
-                                  coverage:
-                                    event.target.value as Coverage,
-                                }
-                              : f
-                          )
-                        )
-                      }
-                    >
-                      <option value="unknown">Not specified</option>
-                      <option value="3">L3</option>
-                      <option value="5">L5</option>
-                      <option value="both">Both Levels</option>
-                    </select>
-                  </label>
-                </div>
-              </div>
-            ))}
-          </>
-        )}
-
-        {error && (
-          <p
-            role="alert"
-            style={{
-              color: '#b91c1c',
-              background: '#fef2f2',
-              padding: 12,
-              borderRadius: 8,
-              marginTop: 12,
-            }}
-          >
-            {error}
-          </p>
-        )}
-
-        {notice && (
-          <p
-            role="status"
-            style={{
-              color: '#166534',
-              background: '#f0fdf4',
-              padding: 12,
-              borderRadius: 8,
-              marginTop: 12,
-            }}
-          >
-            {notice}
-          </p>
-        )}
-      </section>
+      {notice && (
+        <p
+          role="status"
+          style={{
+            ...panel,
+            background: '#f0fdf4',
+            color: '#166534',
+          }}
+        >
+          {notice}
+        </p>
+      )}
 
       {snapshot && validFiles.length > 0 && (
         <>
-          <section
-            style={{
-              ...panel,
-              background: '#f0fdf4',
-              borderColor: '#bbf7d0',
-            }}
-          >
-            <strong style={{ color: '#166534' }}>
-              {snapshot.baseline
-                ? '✓ Historical Baseline Established'
-                : 'Historical Baseline Not Yet Saved'}
-            </strong>
+          <PoSyncControls
+            items={poItems}
+            onChanged={loadSnapshot}
+          />
 
-            <p style={{ ...muted, marginTop: 7 }}>
-              Existing requisitions and saved historical
-              classifications are protected.
-            </p>
+          {newItems.length > 0 && (
+            <NewOrderImport
+              items={newItems}
+              onChanged={loadSnapshot}
+              onRegister={registerNew}
+            />
+          )}
 
-            {!snapshot.baseline && (
+          <ReviewGroup
+            title="3. Needs Review"
+            items={reviewItems}
+            initiallyExpanded
+            onMark={(number) =>
+              void changeHistorical(number, false)
+            }
+            onUnmark={(number) =>
+              void changeHistorical(number, true)
+            }
+          />
+
+          {combined.excluded.length > 0 && (
+            <details
+              ref={(element) => {
+                if (
+                  element &&
+                  !element.dataset.initialised
+                ) {
+                  element.open = true
+                  element.dataset.initialised = '1'
+                }
+              }}
+              style={panel}
+            >
+              <summary
+                style={{
+                  fontSize: 20,
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                }}
+              >
+                4. Excluded Requisitions
+                {' '}
+                ({combined.excluded.length})
+              </summary>
+
+              {combined.excluded.map((entry) => (
+                <div
+                  key={entry.number}
+                  style={{
+                    padding: 12,
+                    marginTop: 10,
+                    borderRadius: 8,
+                    border: '1px solid #e2e8f0',
+                    background: '#f8fafc',
+                  }}
+                >
+                  <strong>{entry.number}</strong>
+                  {' · '}
+                  {entry.reasons.join(' / ')}
+                </div>
+              ))}
+            </details>
+          )}
+
+          <ReviewGroup
+            title="Historical Requisitions"
+            items={historicalItems}
+            initiallyExpanded={false}
+            onMark={(number) =>
+              void changeHistorical(number, false)
+            }
+            onUnmark={(number) =>
+              void changeHistorical(number, true)
+            }
+          />
+
+          <ReviewGroup
+            title="Unchanged Requisitions"
+            items={unchangedItems}
+            initiallyExpanded={false}
+            onMark={(number) =>
+              void changeHistorical(number, false)
+            }
+            onUnmark={(number) =>
+              void changeHistorical(number, true)
+            }
+          />
+
+          {!snapshot.baseline && (
+            <details style={panel}>
+              <summary
+                style={{ cursor: 'pointer' }}
+              >
+                Initial Historical Baseline Setup
+              </summary>
+
+              <p
+                style={{
+                  ...muted,
+                  marginTop: 12,
+                }}
+              >
+                Initial setup requires five distinct staff
+                exports with confirmed L3/L5 coverage.
+              </p>
+
+              {uploads.map((file) => (
+                <label
+                  key={file.id}
+                  style={{
+                    display: 'block',
+                    marginTop: 11,
+                  }}
+                >
+                  {file.name}
+
+                  <select
+                    style={{
+                      display: 'block',
+                      padding: 8,
+                      marginTop: 6,
+                    }}
+                    value={file.coverage}
+                    onChange={(event) => {
+                      const next = uploads.map((item) =>
+                        item.id === file.id
+                          ? {
+                              ...item,
+                              coverage:
+                                event.target.value as
+                                  UploadedExport['coverage'],
+                            }
+                          : item
+                      )
+
+                      uploadsRef.current = next
+                      setUploads(next)
+                    }}
+                  >
+                    <option value="unknown">
+                      Unknown
+                    </option>
+                    <option value="3">L3</option>
+                    <option value="5">L5</option>
+                    <option value="both">
+                      Both
+                    </option>
+                  </select>
+                </label>
+              ))}
+
               <button
                 type="button"
                 style={{
                   ...button,
-                  marginTop: 12,
-                  background: readyForBaseline
-                    ? '#166534'
-                    : '#e5e7eb',
-                  color: readyForBaseline ? '#fff' : '#6b7280',
+                  marginTop: 13,
                 }}
                 disabled={!readyForBaseline || busy}
-                onClick={() => void establishBaseline()}
+                onClick={() =>
+                  void establishBaseline()
+                }
               >
                 Establish Historical Baseline
               </button>
-            )}
-          </section>
+            </details>
+          )}
 
           <div
             style={{
               display: 'grid',
               gridTemplateColumns:
-                'repeat(auto-fit,minmax(130px,1fr))',
+                'repeat(auto-fit,minmax(140px,1fr))',
               gap: 10,
-              marginBottom: 18,
+              marginTop: 20,
             }}
           >
             {[
               ['Excel Files', validFiles.length],
               ['Eligible', combined.records.length],
-              ['Updated POs', count('po')],
-              ['New Requisitions', count('new')],
-              ['Needs Review', count('review')],
+              ['Updated POs', poItems.length],
+              ['New Requisitions', newItems.length],
+              ['Needs Review', reviewItems.length],
               ['Excluded', combined.excluded.length],
               ['Saved Historical', snapshot.history.length],
             ].map(([label, value]) => (
               <div
                 key={String(label)}
-                style={{ ...panel, padding: 13, marginBottom: 0 }}
+                style={{
+                  ...panel,
+                  marginBottom: 0,
+                  padding: 14,
+                }}
               >
-                <p style={muted}>{label}</p>
-                <strong style={{ fontSize: 24 }}>{value}</strong>
+                <div style={muted}>
+                  {label}
+                </div>
+
+                <strong
+                  style={{
+                    display: 'block',
+                    fontSize: 24,
+                    marginTop: 5,
+                  }}
+                >
+                  {value}
+                </strong>
               </div>
             ))}
           </div>
-
-          <section style={panel}>
-            <label>
-              <strong>Search Review Results</strong>
-              <input
-                style={{ ...input, marginTop: 8 }}
-                value={search}
-                placeholder="Requisition number, staff or item..."
-                onChange={(event) => setSearch(event.target.value)}
-              />
-            </label>
-          </section>
-
-          {/* 1. UPDATED POs */}
-          <PoSyncControls
-            items={byGroup('po')}
-            onChanged={loadSnapshot}
-          />
-
-          {/* 2. NEW REQUISITIONS */}
-          <NewOrderImport
-            items={byGroup('new')}
-            onChanged={loadSnapshot}
-          />
-
-          {/* 3. NEEDS REVIEW */}
-          <ReviewSection
-            title="Needs Review"
-            items={byGroup('review')}
-            initialOpen={true}
-            baseline={snapshot.baseline}
-            busy={busy}
-            onMark={(number) =>
-              void changeHistorical(number, false)
-            }
-            onUnmark={(number) =>
-              void changeHistorical(number, true)
-            }
-          />
-
-          {/* 4. EXCLUDED REQUISITIONS */}
-          <section style={panel}>
-            <h2 style={{ fontSize: 20, fontWeight: 800 }}>
-              Excluded Requisitions ({combined.excluded.length})
-            </h2>
-
-            <p style={{ ...muted, marginTop: 6 }}>
-              Draft, cancelled, rejected and other excluded orders.
-              These cannot be imported through Excel Sync.
-            </p>
-
-            {combined.excluded.length === 0 && (
-              <p style={{ ...muted, marginTop: 13 }}>
-                No excluded requisitions.
-              </p>
-            )}
-
-            {combined.excluded.map((entry) => (
-              <details
-                key={entry.number}
-                open
-                style={{
-                  border: '1px solid #e2e8f0',
-                  borderRadius: 9,
-                  marginTop: 10,
-                  padding: 12,
-                  background: '#f8fafc',
-                }}
-              >
-                <summary
-                  style={{
-                    cursor: 'pointer',
-                    fontWeight: 800,
-                  }}
-                >
-                  {entry.number}
-                  {' · '}
-                  {entry.reasons.join(' / ')}
-                </summary>
-
-                <p style={{ ...muted, marginTop: 8 }}>
-                  Excluded from active imports and historical baseline.
-                </p>
-              </details>
-            ))}
-          </section>
-
-          {/* 5. ARCHIVE / UNCHANGED */}
-          <ReviewSection
-            title="Historical Requisitions"
-            items={byGroup('historical')}
-            initialOpen={false}
-            baseline={snapshot.baseline}
-            busy={busy}
-            onMark={(number) =>
-              void changeHistorical(number, false)
-            }
-            onUnmark={(number) =>
-              void changeHistorical(number, true)
-            }
-          />
-
-          <ReviewSection
-            title="Unchanged Requisitions"
-            items={byGroup('unchanged')}
-            initialOpen={false}
-            baseline={snapshot.baseline}
-            busy={busy}
-            onMark={(number) =>
-              void changeHistorical(number, false)
-            }
-            onUnmark={(number) =>
-              void changeHistorical(number, true)
-            }
-          />
         </>
       )}
-    </main>
+    </div>
   )
 }
